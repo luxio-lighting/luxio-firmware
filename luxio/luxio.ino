@@ -2,7 +2,7 @@
  * Defines
  */
 #define DEBUG 1
-#define VERSION 33
+#define VERSION 34
 #ifdef ARDUINO_ESP8266_WEMOS_D1MINI
   #define PLATFORM "WEMOS"
   #define DATAPIN D3
@@ -302,6 +302,7 @@ void setup_mdns() {
   MDNS.addServiceTxt("luxio", "tcp", "id", localMac);
   MDNS.addServiceTxt("luxio", "tcp", "version", String(VERSION));
   MDNS.addServiceTxt("luxio", "tcp", "name", name);
+  MDNS.addServiceTxt("luxio", "tcp", "pixels", String(numPixels));
   debug("setup", "mdns end");
 }
 
