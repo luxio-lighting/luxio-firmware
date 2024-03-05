@@ -76,10 +76,12 @@ struct ColorRGBW {
  */
 namespace nupnp {
   void sync();
-}
+  bool is_syncing = false;
+}  // namespace nupnp
 namespace ota {
   void sync();
-}
+  bool is_syncing = false;
+}  // namespace ota
 JsonDocument get_full_state();
 JsonDocument handle_request(int req_id, String method, JsonVariant params);
 void emit_event(String event, JsonDocument &data);
@@ -465,7 +467,7 @@ namespace wifi {
       timer.setTimeout(nupnp::sync, 1000);
 
       // Sync ota
-      timer.setTimeout(ota::sync, 1000);
+      timer.setTimeout(ota::sync, 5000);
     });
 
     onConnected = WiFi.onStationModeConnected([](const WiFiEventStationModeConnected &event) {
@@ -498,6 +500,7 @@ namespace wifi {
     } else {
       debug("Connecting to " + String(config->wifi_ssid) + "...");
       WiFi.begin(config->wifi_ssid, config->wifi_pass);
+      WiFi.setSleepMode(WIFI_NONE_SLEEP);
     }
   }
 
@@ -1320,14 +1323,13 @@ namespace mdns {
 
 namespace nupnp {
 
-  const String URL = "https://nupnp.luxio.lighting/";
+  const String URL = "http://nupnp.luxio.lighting/";
   const int INTERVAL = 1000 * 60 * 5;  // 5 minutes
 
-  bool is_syncing = false;
   bool was_connected = false;
   JsonDocument body_json;
   String body_string;
-  WiFiClientSecure wifi_client;
+  WiFiClient wifi_client;
   HTTPClient http_client;
 
   void debug(String message) {
@@ -1338,7 +1340,10 @@ namespace nupnp {
     if (wifi::is_connected == false)
       return;
 
-    if (is_syncing)
+    if (nupnp::is_syncing == true)
+      return;
+
+    if (ota::is_syncing == true)
       return;
 
     is_syncing = true;
@@ -1359,7 +1364,6 @@ namespace nupnp {
     // Make the request
     http_client.begin(wifi_client, URL);
     http_client.addHeader("Content-Type", "application/json");
-    // http_client.addHeader("Accept", "application/json");
     int http_code = http_client.POST(body_string);
 
     if (http_code < 0) {
@@ -1374,10 +1378,6 @@ namespace nupnp {
   }
 
   void setup() {
-    // Ignore SSL certificates and set buffer size to prevent a crash
-    wifi_client.setInsecure();
-    wifi_client.setBufferSizes(1024, 1024);
-
     // Create Timer
     timer.setInterval(sync, INTERVAL);
   }
@@ -1386,14 +1386,10 @@ namespace nupnp {
 
 namespace ota {
 
-  const int INTERVAL = 1000 * 60 * 5;  // 5 minutes
-  const String HOST = "ota.luxio.lighting";
-  const String PATH = "/?platform=" + String(PLATFORM) + "&id=" + sys::get_id();
-  const int PORT = 443;
+  const int INTERVAL = 1000 * 60 * 60;  // 1 hour
+  const String URL = "http://ota.luxio.lighting/?platform=" + String(PLATFORM) + "&id=" + sys::get_id();
 
-  WiFiClientSecure wifi_client;
-  bool is_syncing = false;
-  bool is_synced_since_start = false;
+  WiFiClient wifi_client;
 
   void debug(String message) {
     ::debug("ota", message);
@@ -1403,18 +1399,16 @@ namespace ota {
     if (wifi::is_connected == false)
       return;
 
-    if (is_syncing)
+    if (nupnp::is_syncing == true)
+      return;
+
+    if (ota::is_syncing == true)
       return;
 
     is_syncing = true;
     debug("Checking for updates...");
 
-    t_httpUpdate_return ret = ESPhttpUpdate.update(wifi_client,
-        HOST,
-        PORT,
-        PATH,
-        String(VERSION));
-
+    t_httpUpdate_return ret = ESPhttpUpdate.update(wifi_client, URL, String(VERSION));
     switch (ret) {
       case HTTP_UPDATE_FAILED: {
         debug("Failed: " + ESPhttpUpdate.getLastErrorString() + " (" + String(ESPhttpUpdate.getLastError()) + ")");
@@ -1434,9 +1428,19 @@ namespace ota {
   }
 
   void setup() {
-    // Ignore SSL certificates and set buffer size to prevent a crash
-    wifi_client.setInsecure();
-    wifi_client.setBufferSizes(1024, 1024);
+    // Set callbacks
+    ESPhttpUpdate.onStart([]() {
+      debug("Start");
+    });
+    ESPhttpUpdate.onProgress([](int progress, int total) {
+      debug("Progress: " + String(progress) + " / " + String(total));
+    });
+    ESPhttpUpdate.onEnd([]() {
+      debug("End");
+    });
+    ESPhttpUpdate.onError([](int error) {
+      debug("Error: " + String(error) + " - " + ESPhttpUpdate.getLastErrorString());
+    });
 
     // Create Timer
     timer.setInterval(sync, INTERVAL);
