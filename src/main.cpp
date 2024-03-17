@@ -45,7 +45,7 @@ enum LedType {
 
 // Default Config
 #define DEFAULT_LED_COUNT 60
-#define DEFAULT_LED_BRIGHTNESS 255
+#define DEFAULT_LED_BRIGHTNESS 50
 #define DEFAULT_LED_TYPE LedType::SK6812
 #ifdef ESP32
 #define DEFAULT_LED_PIN 16
@@ -260,7 +260,7 @@ namespace sys {
     debug("Name: " + String(config->name));
     debug("Version: " + String(VERSION));
 
-    timer.setInterval([]() { debug("Uptime: " + String(millis() / 1000) + "s"); }, 1000 * 60);
+    timer.setInterval([]() { debug("Uptime: " + String(millis() / 1000) + "s"); }, 1000 * 10);
   }
 
   void loop() {
@@ -683,7 +683,17 @@ namespace http {
     // Events
     http_events = new AsyncEventSource("/events");
     http_events->onConnect([](AsyncEventSourceClient *client) {
-      // TODO
+      debug("Client Connected");
+
+      // Get Full State
+      JsonDocument state = get_full_state();
+
+      // Serialize
+      String output;
+      serializeJson(state, output);
+
+      // Send Full State
+      client->send(output.c_str(), "full_state", millis());
     });
 
     // Server
@@ -754,6 +764,7 @@ namespace led {
   const int MAX_LED_COUNT = 512;  // TODO: Make dynamic size
 
   JsonDocument get_config();
+  void setup();
   void emit_config();
   JsonDocument get_state();
   void emit_state();
@@ -901,20 +912,14 @@ namespace led {
   }
 
   void set_count(int count) {
-    // Set all LEDs to black
-    strip->fill();
-    strip->show();
-
-    // Update length
-    strip->updateLength(count);
-    strip->show();
-
     // Save new count
     config->led_count = count;
     config.save();
 
-    // Animate to initial color
-    set_color(initial_color);
+    // Clear & Setup
+    strip->clear();
+    strip->show();
+    led::setup();
 
     // Update nupnp
     timer.setTimeout(nupnp::sync, 1000);
@@ -949,15 +954,14 @@ namespace led {
   }
 
   void set_pin(uint8_t pin) {
-    // Set new pin
-    strip->setPin(pin);
-
     // Save new pin
     config->led_pin = pin;
     config.save();
 
-    // Animate
-    animate();
+    // Clear & Setup
+    strip->clear();
+    strip->show();
+    led::setup();
 
     // Emit config
     timer.setTimeout(emit_config, 1);
@@ -975,12 +979,26 @@ namespace led {
 
   bool set_type(String type) {
     if (type.equals("SK6812")) {
+      // Save
       config->led_type = LedType::SK6812;
       config.save();
+
+      // Clear & Setup
+      strip->clear();
+      strip->show();
+      led::setup();
+
       return true;
     } else if (type.equals("WS2812")) {
+      // Save
       config->led_type = LedType::WS2812;
       config.save();
+
+      // Clear & Setup
+      strip->clear();
+      strip->show();
+      led::setup();
+
       return true;
     } else {
       return false;
