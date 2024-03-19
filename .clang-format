@@ -1,0 +1,16 @@
+# https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+
+BasedOnStyle: Google
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ColumnLimit: 0
+BraceBreakingStyle: Stroustrup
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AlignAfterOpenBracket: DontAlign
+NamespaceIndentation: All
+BreakBeforeTernaryOperators: true
+AlignOperands: false
