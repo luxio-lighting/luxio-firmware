@@ -34,7 +34,7 @@ enum LedType {
  */
 
 // Software Version
-#define VERSION 101
+#define VERSION 102
 
 // Platform
 #ifdef ESP32
