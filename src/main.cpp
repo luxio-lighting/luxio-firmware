@@ -685,6 +685,13 @@ namespace http {
     http_events->onConnect([](AsyncEventSourceClient *client) {
       debug("Client Connected");
 
+      // Disable ACK Timeouts. I don't know why these trigger,
+      // but they happen after doing a POST request — most of the time.
+      // Disabling timeouts altogether seems to work fine.
+      client->client()->onTimeout([](void *arg, AsyncClient *client, unsigned int time) {
+        debug("Client ACK Timeout");
+      });
+
       // Get Full State
       JsonDocument state = get_full_state();
 
