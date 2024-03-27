@@ -34,7 +34,7 @@ enum LedType {
  */
 
 // Software Version
-#define VERSION 102
+#define VERSION 103
 
 // Platform
 #ifdef ESP32
@@ -434,6 +434,8 @@ namespace serial {
 namespace wifi {
 
   bool is_connected = false;
+  bool is_connected_since_start = false;
+  bool is_hotspot = false;
 
   void emit_state();
   void emit_config();
@@ -453,6 +455,7 @@ namespace wifi {
 
     onIP = WiFi.onStationModeGotIP([](const WiFiEventStationModeGotIP &event) {
       is_connected = true;
+      is_connected_since_start = true;
 
       // Debug
       debug("IP Address: " + event.ip.toString());
@@ -492,11 +495,19 @@ namespace wifi {
       doc["reason"] = event.reason;
       emit_event("wifi.disconnected", doc);
       emit_state();
+
+      // Start Hotspot
+      if (is_connected_since_start == false && is_hotspot == false) {
+        debug("Could not connect. Starting hotspot...");
+        WiFi.softAP(sys::get_device_name());
+        is_hotspot = true;
+      }
     });
 
     if (strlen(config->wifi_ssid) == 0) {
       debug("No Wi-Fi credentials found. Starting hotspot...");
       WiFi.softAP(sys::get_device_name());
+      is_hotspot = true;
     } else {
       debug("Connecting to " + String(config->wifi_ssid) + "...");
       WiFi.begin(config->wifi_ssid, config->wifi_pass);
@@ -641,12 +652,14 @@ namespace wifi {
         debug("Disconnecting...");
         WiFi.disconnect();
 
+        is_hotspot = false;
+
         // Connect to the new network
         debug("Connecting to " + ssid + "...");
         WiFi.mode(WIFI_STA);
         WiFi.begin(ssid.c_str(), pass.c_str());
       },
-          1);
+          500);
 
       return APIResponse{};
     }
@@ -662,7 +675,7 @@ namespace wifi {
         debug("Disconnecting...");
         WiFi.disconnect();
       },
-          1);
+          500);
 
       return APIResponse{};
     }
@@ -1351,7 +1364,6 @@ namespace nupnp {
   const String URL = "http://nupnp.luxio.lighting/";
   const int INTERVAL = 1000 * 60 * 5;  // 5 minutes
 
-  bool was_connected = false;
   JsonDocument body_json;
   String body_string;
   WiFiClient wifi_client;
