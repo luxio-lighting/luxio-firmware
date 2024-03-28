@@ -91,7 +91,7 @@ void emit_event(String event);
  * Globals
  */
 AsyncWebServer *http_server = NULL;
-AsyncEventSource *http_events = NULL;
+AsyncWebSocket *http_websocket = NULL;
 Adafruit_NeoPixel *strip = NULL;
 AsyncTimer timer;
 bool debug_enabled = true;
@@ -132,8 +132,8 @@ void debug(String nsp, String message) {
   }
 
   // Send to SSE
-  if (http_events != NULL) {
-    http_events->send(output.c_str(), NULL, millis());
+  if (http_websocket != NULL) {
+    http_websocket->textAll(output);
   }
 }
 
@@ -693,32 +693,47 @@ namespace http {
   }
 
   void setup() {
-    // Events
-    http_events = new AsyncEventSource("/events");
-    http_events->onConnect([](AsyncEventSourceClient *client) {
-      debug("Client Connected");
+    // Websocket
+    http_websocket = new AsyncWebSocket("/ws");
+    http_websocket->onEvent([](AsyncWebSocket *server,
+                                AsyncWebSocketClient *client,
+                                AwsEventType type,
+                                void *arg,
+                                uint8_t *data,
+                                size_t len) {
+      switch (type) {
+        case WS_EVT_CONNECT: {
+          Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
 
-      // Disable ACK Timeouts. I don't know why these trigger,
-      // but they happen after doing a POST request — most of the time.
-      // Disabling timeouts altogether seems to work fine.
-      client->client()->onTimeout([](void *arg, AsyncClient *client, unsigned int time) {
-        debug("Client ACK Timeout");
-      });
+          JsonDocument doc;
+          doc["event"] = "full_state";
+          doc["data"] = get_full_state();
 
-      // Get Full State
-      JsonDocument state = get_full_state();
+          // Serialize
+          String output;
+          serializeJson(doc, output);
 
-      // Serialize
-      String output;
-      serializeJson(state, output);
-
-      // Send Full State
-      client->send(output.c_str(), "full_state", millis());
+          client->text(output);
+          break;
+        }
+        case WS_EVT_DISCONNECT: {
+          Serial.printf("WebSocket client #%u disconnected\n", client->id());
+          break;
+        }
+        case WS_EVT_DATA: {
+          // Parse data as JSON
+          // TODO
+          break;
+        }
+        case WS_EVT_PONG:
+        case WS_EVT_ERROR:
+          break;
+      }
     });
 
     // Server
     http_server = new AsyncWebServer(PORT);
-    http_server->addHandler(http_events);
+    http_server->addHandler(http_websocket);
     http_server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
       debug("GET " + request->url());
 
@@ -760,17 +775,16 @@ namespace http {
     debug("Listening on http://0.0.0.0:" + String(PORT));
   }
 
-  void emit(JsonDocument &doc) {
-    if (http_events == NULL) {
-      return;
-    }
+  void loop() {
+    http_websocket->cleanupClients();
+  }
 
+  void emit(JsonDocument &doc) {
     // Serialize
     String output;
     serializeJson(doc, output);
 
-    // Send
-    http_events->send(output.c_str(), NULL, millis());
+    http_websocket->textAll(output);
   }
 
 }  // namespace http
@@ -1638,4 +1652,5 @@ void loop() {
   sys::loop();
   led::loop();
   mdns::loop();
+  http::loop();
 }
