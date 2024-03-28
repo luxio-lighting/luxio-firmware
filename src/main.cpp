@@ -74,14 +74,21 @@ struct ColorRGBW {
 /*
  * Headers
  */
+namespace http {
+  AsyncWebServer *webserver = NULL;
+  AsyncWebSocket *websocket = NULL;
+}  // namespace http
+
 namespace nupnp {
   void sync();
   bool is_syncing = false;
 }  // namespace nupnp
+
 namespace ota {
   void sync();
   bool is_syncing = false;
 }  // namespace ota
+
 JsonDocument get_full_state();
 JsonDocument handle_request(int req_id, String method, JsonVariant params);
 void emit_event(String event, JsonDocument &data);
@@ -90,9 +97,6 @@ void emit_event(String event);
 /*
  * Globals
  */
-AsyncWebServer *http_server = NULL;
-AsyncWebSocket *http_websocket = NULL;
-Adafruit_NeoPixel *strip = NULL;
 AsyncTimer timer;
 bool debug_enabled = true;
 
@@ -132,8 +136,8 @@ void debug(String nsp, String message) {
   }
 
   // Send to SSE
-  if (http_websocket != NULL) {
-    http_websocket->textAll(output);
+  if (http::websocket != NULL) {
+    http::websocket->textAll(output);
   }
 }
 
@@ -687,6 +691,8 @@ namespace wifi {
 namespace http {
 
   const int PORT = 80;
+  // AsyncWebServer *webserver = NULL;
+  // AsyncWebSocket *websocket = NULL;
 
   void debug(String message) {
     ::debug("http", message);
@@ -694,13 +700,13 @@ namespace http {
 
   void setup() {
     // Websocket
-    http_websocket = new AsyncWebSocket("/ws");
-    http_websocket->onEvent([](AsyncWebSocket *server,
-                                AsyncWebSocketClient *client,
-                                AwsEventType type,
-                                void *arg,
-                                uint8_t *data,
-                                size_t len) {
+    websocket = new AsyncWebSocket("/ws");
+    websocket->onEvent([](AsyncWebSocket *server,
+                           AsyncWebSocketClient *client,
+                           AwsEventType type,
+                           void *arg,
+                           uint8_t *data,
+                           size_t len) {
       switch (type) {
         case WS_EVT_CONNECT: {
           Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
@@ -732,9 +738,9 @@ namespace http {
     });
 
     // Server
-    http_server = new AsyncWebServer(PORT);
-    http_server->addHandler(http_websocket);
-    http_server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    webserver = new AsyncWebServer(PORT);
+    webserver->addHandler(websocket);
+    webserver->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
       debug("GET " + request->url());
 
       JsonDocument res = get_full_state();
@@ -743,7 +749,7 @@ namespace http {
       serializeJson(res, *response);
       request->send(response);
     });
-    http_server->addHandler(new AsyncCallbackJsonWebHandler("/", [](AsyncWebServerRequest *request, JsonVariant &req) {
+    webserver->addHandler(new AsyncCallbackJsonWebHandler("/", [](AsyncWebServerRequest *request, JsonVariant &req) {
       debug("POST " + request->url());
 
       int req_id = 0;
@@ -766,17 +772,17 @@ namespace http {
       serializeJson(res, *response);
       request->send(response);
     }));
-    http_server->onNotFound([](AsyncWebServerRequest *request) {
+    webserver->onNotFound([](AsyncWebServerRequest *request) {
       debug("GET " + request->url() + " — Not Found");
       request->send(404, "application/json", "{\"error\": \"not_found\"}");
     });
-    http_server->begin();
+    webserver->begin();
 
     debug("Listening on http://0.0.0.0:" + String(PORT));
   }
 
   void loop() {
-    http_websocket->cleanupClients();
+    websocket->cleanupClients();
   }
 
   void emit(JsonDocument &doc) {
@@ -784,7 +790,7 @@ namespace http {
     String output;
     serializeJson(doc, output);
 
-    http_websocket->textAll(output);
+    websocket->textAll(output);
   }
 
 }  // namespace http
@@ -796,6 +802,8 @@ namespace led {
 
   const int ANIMATE_SPEED = 350;  // Milliseconds
   const int MAX_LED_COUNT = 512;  // TODO: Make dynamic size
+
+  Adafruit_NeoPixel *strip = NULL;
 
   JsonDocument get_config();
   void setup();
