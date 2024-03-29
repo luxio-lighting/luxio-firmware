@@ -12,11 +12,11 @@ enum LedType {
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <AsyncJson.h>
 #include <AsyncTimer.h>
 #include <EEvar.h>
-
-#include "AsyncJson.h"
-#include "ESPAsyncWebServer.h"
+#include <ESPAsyncWebServer.h>
+#include <LuaWrapper.h>
 #ifdef ESP32
 #include <AsyncTCP.h>
 #include <WiFi.h>
@@ -28,7 +28,6 @@ enum LedType {
 #include <ESP8266mDNS.h>
 #include <ESPAsyncTCP.h>
 #endif
-
 /*
  * Defines
  */
@@ -805,6 +804,12 @@ namespace led {
 
   Adafruit_NeoPixel *strip = NULL;
 
+  LuaWrapper lua_wrapper;
+  String lua_script = "";
+  unsigned long lua_timer;
+  bool lua_script_running = false;
+  lua_State *lua_state;
+
   JsonDocument get_config();
   void setup();
   void emit_config();
@@ -1088,6 +1093,33 @@ namespace led {
     ::emit_event("led.config", config);
   }
 
+  void stop_lua() {
+    // lua_close(lua_state);
+    timer.cancel(lua_timer);
+    // lua_script = "";
+    // lua_script_running = false;
+  }
+
+  void start_lua(String script) {
+    // Load the script once
+    if (luaL_loadbuffer(lua_state, script.c_str(), script.length(), "line")) {
+      debug("# lua load error:\n" + String(lua_tostring(lua_state, -1)));
+      lua_pop(lua_state, 1);
+      return;
+    }
+
+    // Execute the script every time
+    lua_timer = timer.setInterval([]() {
+      lua_pushvalue(lua_state, -1);
+      if (lua_pcall(lua_state, 0, 0, 0) != 0) {
+        debug("# lua run error:\n" + String(lua_tostring(lua_state, -1)));
+        lua_pop(lua_state, 1);
+        stop_lua();
+      }
+    },
+        1000 / 60);
+  }
+
   void setup() {
     int led_count = get_count();
     int led_pin = get_pin();
@@ -1129,6 +1161,49 @@ namespace led {
 
     // Animate to initial color
     set_color(initial_color);
+
+    // Setup LUA
+    lua_state = luaL_newstate();
+    luaopen_base(lua_state);
+    luaopen_math(lua_state);
+    lua_register(lua_state, "luxio_set_pixel_color_rgb", [](lua_State *L) {
+      uint8_t pixel = luaL_checkinteger(L, 1);
+      uint8_t r = luaL_checkinteger(L, 2);
+      uint8_t g = luaL_checkinteger(L, 3);
+      uint8_t b = luaL_checkinteger(L, 4);
+      uint8_t w = luaL_checkinteger(L, 5);
+
+      strip->setPixelColor(pixel, strip->Color(r, g, b, w));
+
+      return 0;
+    });
+    lua_register(lua_state, "luxio_set_pixel_color_hsv", [](lua_State *L) {
+      uint8_t pixel = luaL_checkinteger(L, 1);
+      uint16_t h = luaL_checkinteger(L, 2);
+      uint8_t s = luaL_checkinteger(L, 3);
+      uint8_t v = luaL_checkinteger(L, 4);
+
+      strip->setPixelColor(pixel, strip->ColorHSV(h, s, v));
+
+      return 0;
+    });
+    lua_register(lua_state, "luxio_get_pixel_count", [](lua_State *L) {
+      lua_pushinteger(L, strip->numPixels());
+      return 1;
+    });
+    lua_register(lua_state, "luxio_show", [](lua_State *L) {
+      strip->show();
+      return 0;
+    });
+    lua_register(lua_state, "millis", [](lua_State *L) -> int {
+      lua_pushnumber(L, (lua_Number)millis());
+      return 1;
+    });
+    lua_register(lua_state, "print", [](lua_State *L) -> int {
+      String message = luaL_checkstring(L, 1);
+      debug("lua: " + message);
+      return 0;
+    });
   }
 
   void loop() {
@@ -1344,6 +1419,29 @@ namespace led {
       return APIResponse{};
     }
 
+    APIResponse start_lua(JsonVariant params) {
+      if (!params["script"].is<String>()) {
+        return APIResponse{
+            .err = "missing_script",
+        };
+      }
+
+      String script = params["script"].as<String>();
+      timer.setTimeout([script]() {
+        led::stop_lua();
+        led::start_lua(script);
+      },
+          100);
+
+      return APIResponse{};
+    }
+
+    APIResponse stop_lua(JsonVariant params) {
+      led::stop_lua();
+
+      return APIResponse{};
+    }
+
     APIResponse set_animation(JsonVariant params) {
       // TODO
 
@@ -1553,6 +1651,10 @@ JsonDocument handle_request(const int req_id, const String method, const JsonVar
     fn = &led::api::set_brightness;
   } else if (method.equals("led.set_animation")) {
     fn = &led::api::set_animation;
+  } else if (method.equals("led.start_lua")) {
+    fn = &led::api::start_lua;
+  } else if (method.equals("led.stop_lua")) {
+    fn = &led::api::stop_lua;
   } else if (method.equals("system.ping")) {
     fn = &sys::api::ping;
   } else if (method.equals("system.test_error")) {
