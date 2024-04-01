@@ -33,7 +33,7 @@ enum LedType {
  */
 
 // Software Version
-#define VERSION 201
+#define VERSION 202
 
 // Platform
 #ifdef ESP32
@@ -70,6 +70,27 @@ struct ColorRGBW {
   uint8_t w = 0;
 };
 
+ColorRGBW color_rgbw_black = ColorRGBW({
+    .r = 0,
+    .g = 0,
+    .b = 0,
+    .w = 0,
+});
+
+ColorRGBW color_rgbw_white = ColorRGBW({
+    .r = 0,
+    .g = 0,
+    .b = 0,
+    .w = 255,
+});
+
+ColorRGBW color_rgb_white = ColorRGBW({
+    .r = 255,
+    .g = 255,
+    .b = 255,
+    .w = 0,
+});
+
 /*
  * Headers
  */
@@ -87,6 +108,10 @@ namespace ota {
   void sync();
   bool is_syncing = false;
 }  // namespace ota
+
+namespace led {
+  void stop_lua();
+}
 
 JsonDocument get_full_state();
 JsonDocument handle_request(int req_id, String method, JsonVariant params);
@@ -836,6 +861,17 @@ namespace led {
   int state_brightness = DEFAULT_LED_BRIGHTNESS;
   std::vector<ColorRGBW> state_colors;
 
+  void set_target_pixel(int i, ColorRGBW &color) {
+    // Set color
+    pixels_target[i] = color;
+
+    // Mix color with brightness
+    pixels_target[i].r = (double)pixels_target[i].r * (double)state_brightness / (double)255;
+    pixels_target[i].g = (double)pixels_target[i].g * (double)state_brightness / (double)255;
+    pixels_target[i].b = (double)pixels_target[i].b * (double)state_brightness / (double)255;
+    pixels_target[i].w = (double)pixels_target[i].w * (double)state_brightness / (double)255;
+  }
+
   void animate() {
     // Set current pixels to previous pixels
     for (int i = 0; i < config->led_count; i++) {
@@ -845,21 +881,23 @@ namespace led {
     // Set target pixels to state pixels
     for (int i = 0; i < config->led_count; i++) {
       if (state_on) {
-        // Set color
-        pixels_target[i] = colors_target[i];
+        set_target_pixel(i, colors_target[i]);
+        // // Set color
+        // pixels_target[i] = colors_target[i];
 
-        // Mix color with brightness
-        pixels_target[i].r = (double)pixels_target[i].r * (double)state_brightness / (double)255;
-        pixels_target[i].g = (double)pixels_target[i].g * (double)state_brightness / (double)255;
-        pixels_target[i].b = (double)pixels_target[i].b * (double)state_brightness / (double)255;
-        pixels_target[i].w = (double)pixels_target[i].w * (double)state_brightness / (double)255;
+        // // Mix color with brightness
+        // pixels_target[i].r = (double)pixels_target[i].r * (double)state_brightness / (double)255;
+        // pixels_target[i].g = (double)pixels_target[i].g * (double)state_brightness / (double)255;
+        // pixels_target[i].b = (double)pixels_target[i].b * (double)state_brightness / (double)255;
+        // pixels_target[i].w = (double)pixels_target[i].w * (double)state_brightness / (double)255;
       } else {
-        pixels_target[i] = ColorRGBW({
-            .r = 0,
-            .g = 0,
-            .b = 0,
-            .w = 0,
-        });
+        set_target_pixel(i, color_rgbw_black);
+        // pixels_target[i] = ColorRGBW({
+        //     .r = 0,
+        //     .g = 0,
+        //     .b = 0,
+        //     .w = 0,
+        // });
       }
     }
 
@@ -922,6 +960,11 @@ namespace led {
   }
 
   void set_color(ColorRGBW color) {
+    // Stop lua
+    if (lua_running) {
+      stop_lua();
+    }
+
     // Set state
     state_on = true;
     state_colors.clear();
@@ -940,6 +983,12 @@ namespace led {
   }
 
   void set_gradient(/*ColorRGBW colors[]*/) {
+    // Stop lua
+    if (lua_running) {
+      stop_lua();
+    }
+
+    // Set state
     state_on = true;
     // for (int i = 0; i < get_count(); i++) {
     //   state_colors[i] = colors[i];
@@ -1104,18 +1153,6 @@ namespace led {
     lua_state = luaL_newstate();
     luaopen_base(lua_state);
     luaopen_math(lua_state);
-    lua_register(lua_state, "luxio_set_pixel_color_rgb", [](lua_State *L) {
-      uint8_t pixel = luaL_checkinteger(L, 1);
-      uint8_t r = luaL_checkinteger(L, 2);
-      uint8_t g = luaL_checkinteger(L, 3);
-      uint8_t b = luaL_checkinteger(L, 4);
-      uint8_t w = luaL_checkinteger(L, 5);  // TODO: rgbw
-
-      // TODO: Compensate for brightness
-      strip->setPixelColor(pixel, strip->Color(r, g, b, w));
-
-      return 0;
-    });
     lua_register(lua_state, "luxio_set_pixel_color_hsv", [](lua_State *L) {
       uint8_t pixel = luaL_checkinteger(L, 1);
       uint16_t h = luaL_checkinteger(L, 2);
@@ -1127,12 +1164,42 @@ namespace led {
 
       return 0;
     });
+    lua_register(lua_state, "luxio_set_pixel_color_rgb", [](lua_State *L) {
+      uint8_t pixel = luaL_checkinteger(L, 1);
+      uint8_t r = luaL_checkinteger(L, 2);
+      uint8_t g = luaL_checkinteger(L, 3);
+      uint8_t b = luaL_checkinteger(L, 4);
+
+      // TODO: Compensate for brightness
+      strip->setPixelColor(pixel, strip->Color(r, g, b, 0));
+
+      return 0;
+    });
+    lua_register(lua_state, "luxio_set_pixel_color_rgbw", [](lua_State *L) {
+      uint8_t pixel = luaL_checkinteger(L, 1);
+      uint8_t r = luaL_checkinteger(L, 2);
+      uint8_t g = luaL_checkinteger(L, 3);
+      uint8_t b = luaL_checkinteger(L, 4);
+      uint8_t w = luaL_checkinteger(L, 5);
+
+      // TODO: Compensate for brightness
+      strip->setPixelColor(pixel, strip->Color(r, g, b, w));
+
+      return 0;
+    });
     lua_register(lua_state, "luxio_get_pixel_count", [](lua_State *L) {
       lua_pushinteger(L, strip->numPixels());
       return 1;
     });
     lua_register(lua_state, "luxio_show", [](lua_State *L) {
       strip->show();
+      return 0;
+    });
+    lua_register(lua_state, "luxio_done", [](lua_State *L) {
+      // TODO: Test this
+      stop_lua();
+      animate();
+
       return 0;
     });
     lua_register(lua_state, "millis", [](lua_State *L) -> int {
@@ -1164,6 +1231,8 @@ namespace led {
         1000 / 60);  // 60 fps
 
     lua_running = true;
+
+    // TODO: Animate from previous state to animation
   }
 
   void setup() {
@@ -1174,23 +1243,13 @@ namespace led {
     switch (config->led_type) {
       case LedType::SK6812: {
         led_type = NEO_GRBW + NEO_KHZ800;
-        initial_color = ColorRGBW{
-            .r = 0,
-            .g = 0,
-            .b = 0,
-            .w = 255,
-        };
+        initial_color = color_rgbw_white;
         break;
       }
       case LedType::WS2812:
       default: {
         led_type = NEO_GRB + NEO_KHZ800;
-        initial_color = ColorRGBW{
-            .r = 255,
-            .g = 255,
-            .b = 255,
-            .w = 0,
-        };
+        initial_color = color_rgb_white;
         break;
       }
     }
