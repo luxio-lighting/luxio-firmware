@@ -33,7 +33,7 @@ enum LedType {
  */
 
 // Software Version
-#define VERSION 200
+#define VERSION 201
 
 // Platform
 #ifdef ESP32
@@ -804,10 +804,8 @@ namespace led {
 
   Adafruit_NeoPixel *strip = NULL;
 
-  LuaWrapper lua_wrapper;
-  String lua_script = "";
   unsigned long lua_timer;
-  bool lua_script_running = false;
+  bool lua_running = false;
   lua_State *lua_state;
 
   JsonDocument get_config();
@@ -1094,13 +1092,59 @@ namespace led {
   }
 
   void stop_lua() {
-    // lua_close(lua_state);
-    timer.cancel(lua_timer);
-    // lua_script = "";
-    // lua_script_running = false;
+    if (lua_running) {
+      timer.cancel(lua_timer);
+      lua_close(lua_state);
+    }
+
+    lua_running = false;
   }
 
   void start_lua(String script) {
+    lua_state = luaL_newstate();
+    luaopen_base(lua_state);
+    luaopen_math(lua_state);
+    lua_register(lua_state, "luxio_set_pixel_color_rgb", [](lua_State *L) {
+      uint8_t pixel = luaL_checkinteger(L, 1);
+      uint8_t r = luaL_checkinteger(L, 2);
+      uint8_t g = luaL_checkinteger(L, 3);
+      uint8_t b = luaL_checkinteger(L, 4);
+      uint8_t w = luaL_checkinteger(L, 5);  // TODO: rgbw
+
+      // TODO: Compensate for brightness
+      strip->setPixelColor(pixel, strip->Color(r, g, b, w));
+
+      return 0;
+    });
+    lua_register(lua_state, "luxio_set_pixel_color_hsv", [](lua_State *L) {
+      uint8_t pixel = luaL_checkinteger(L, 1);
+      uint16_t h = luaL_checkinteger(L, 2);
+      uint8_t s = luaL_checkinteger(L, 3);
+      uint8_t v = luaL_checkinteger(L, 4);
+
+      // TODO: Compensate for brightness
+      strip->setPixelColor(pixel, strip->ColorHSV(h, s, v));
+
+      return 0;
+    });
+    lua_register(lua_state, "luxio_get_pixel_count", [](lua_State *L) {
+      lua_pushinteger(L, strip->numPixels());
+      return 1;
+    });
+    lua_register(lua_state, "luxio_show", [](lua_State *L) {
+      strip->show();
+      return 0;
+    });
+    lua_register(lua_state, "millis", [](lua_State *L) -> int {
+      lua_pushnumber(L, (lua_Number)millis());
+      return 1;
+    });
+    lua_register(lua_state, "print", [](lua_State *L) -> int {
+      String message = luaL_checkstring(L, 1);
+      debug("lua: " + message);
+      return 0;
+    });
+
     // Load the script once
     if (luaL_loadbuffer(lua_state, script.c_str(), script.length(), "line")) {
       debug("# lua load error:\n" + String(lua_tostring(lua_state, -1)));
@@ -1117,7 +1161,9 @@ namespace led {
         stop_lua();
       }
     },
-        1000 / 60);
+        1000 / 60);  // 60 fps
+
+    lua_running = true;
   }
 
   void setup() {
@@ -1163,52 +1209,17 @@ namespace led {
     set_color(initial_color);
 
     // Setup LUA
-    lua_state = luaL_newstate();
-    luaopen_base(lua_state);
-    luaopen_math(lua_state);
-    lua_register(lua_state, "luxio_set_pixel_color_rgb", [](lua_State *L) {
-      uint8_t pixel = luaL_checkinteger(L, 1);
-      uint8_t r = luaL_checkinteger(L, 2);
-      uint8_t g = luaL_checkinteger(L, 3);
-      uint8_t b = luaL_checkinteger(L, 4);
-      uint8_t w = luaL_checkinteger(L, 5);
 
-      strip->setPixelColor(pixel, strip->Color(r, g, b, w));
-
-      return 0;
-    });
-    lua_register(lua_state, "luxio_set_pixel_color_hsv", [](lua_State *L) {
-      uint8_t pixel = luaL_checkinteger(L, 1);
-      uint16_t h = luaL_checkinteger(L, 2);
-      uint8_t s = luaL_checkinteger(L, 3);
-      uint8_t v = luaL_checkinteger(L, 4);
-
-      strip->setPixelColor(pixel, strip->ColorHSV(h, s, v));
-
-      return 0;
-    });
-    lua_register(lua_state, "luxio_get_pixel_count", [](lua_State *L) {
-      lua_pushinteger(L, strip->numPixels());
-      return 1;
-    });
-    lua_register(lua_state, "luxio_show", [](lua_State *L) {
-      strip->show();
-      return 0;
-    });
-    lua_register(lua_state, "millis", [](lua_State *L) -> int {
-      lua_pushnumber(L, (lua_Number)millis());
-      return 1;
-    });
-    lua_register(lua_state, "print", [](lua_State *L) -> int {
-      String message = luaL_checkstring(L, 1);
-      debug("lua: " + message);
-      return 0;
-    });
+    // TODO: Register method `luxio_done` to stop the animation and revert to the previous state
   }
 
   void loop() {
     if (animating) {
       animate_step();
+    }
+
+    if (lua_running) {
+      // Run every 1/60th of a second
     }
   }
 
