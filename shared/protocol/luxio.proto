@@ -1,0 +1,76 @@
+syntax = "proto3";
+package luxio;
+option java_package = "lighting.luxio.protocol";
+option java_multiple_files = true;
+
+enum Operation {
+  GET_STATE = 0;
+  SET_COLOR = 1;
+  SET_BRIGHTNESS = 2;
+  SET_CONFIG = 3;
+  SET_WIFI = 4;
+  LIST_SCRIPTS = 5;
+  GET_SCRIPT = 6;
+  CREATE_SCRIPT = 7;
+  UPDATE_SCRIPT = 8;
+  DELETE_SCRIPT = 9;
+  RUN_SCRIPT = 10;
+  STOP_SCRIPT = 11;
+  GET_PAIRING_CODE = 12;
+  CHECK_UPDATE = 13;
+  INSTALL_UPDATE = 14;
+}
+enum Mode {
+  COLOR = 0;
+  GRADIENT = 1;
+  ANIMATION = 2;
+}
+message Color {
+  uint32 red = 1;
+  uint32 green = 2;
+  uint32 blue = 3;
+  uint32 white = 4;
+  uint32 warm_white = 5;
+  uint32 cool_white = 6;
+}
+message Config {
+  string name = 1;
+  string strip_type = 2;
+  uint32 led_count = 3;
+  uint32 gpio = 4;
+  uint32 channel = 5;
+}
+message Wifi { string ssid = 1; string password = 2; }
+message Script { string id = 1; string name = 2; string source = 3; Mode mode = 4; }
+message State {
+  string device_id = 1;
+  uint32 build = 2;
+  Config config = 3;
+  uint32 brightness = 4;
+  Color color = 5;
+  string active_script_id = 6;
+  string lan_ip = 7;
+  Mode mode = 8;
+}
+message Request {
+  uint32 id = 1;
+  Operation operation = 2;
+  Color color = 3;
+  uint32 brightness = 4;
+  Config config = 5;
+  Wifi wifi = 6;
+  Script script = 7;
+  string script_id = 8;
+}
+message Response {
+  uint32 id = 1;
+  string error = 2;
+  State state = 3;
+  repeated Script scripts = 4;
+  Script script = 5;
+  string pairing_code = 6;
+  string pairing_qr = 7;
+  uint32 available_build = 8;
+  bool update_checking = 9;
+  string update_error = 10;
+}

@@ -1,0 +1,14 @@
+
+.DS_Store
+node_modules
+.sdk
+.npm-cache
+dist
+build
+DerivedData*
+.gradle
+.env
+*.log
+local.properties
+
+.device/

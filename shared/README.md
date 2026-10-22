@@ -1,0 +1,1 @@
+These are checked-in source snapshots from Luxio shared code. Builds use only these local files. Update snapshots explicitly when the protocol or simulator changes; no sibling checkout or generated link is required.

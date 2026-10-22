@@ -1,0 +1,42 @@
+name: Build static sites
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci && npm run check && npm run build:web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: setup-site
+          path: setup.luxio.lighting/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-site
+          path: studio.luxio.lighting/dist
+      # Each custom domain needs its own Pages repository. These repository
+      # variables and the narrowly scoped deploy token are configured by the owner.
+      - uses: peaceiris/actions-gh-pages@v4
+        if: vars.SETUP_PAGES_REPOSITORY != ''
+        with:
+          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          external_repository: ${{ vars.SETUP_PAGES_REPOSITORY }}
+          publish_branch: gh-pages
+          publish_dir: setup.luxio.lighting/dist
+          cname: setup.luxio.lighting
+      - uses: peaceiris/actions-gh-pages@v4
+        if: vars.STUDIO_PAGES_REPOSITORY != ''
+        with:
+          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          external_repository: ${{ vars.STUDIO_PAGES_REPOSITORY }}
+          publish_branch: gh-pages
+          publish_dir: studio.luxio.lighting/dist
+          cname: studio.luxio.lighting

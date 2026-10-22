@@ -1,0 +1,25 @@
+name: Register hosted firmware update
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: HTTPS URL of the already-hosted firmware manifest
+        required: true
+permissions:
+  contents: read
+jobs:
+  register:
+    environment: firmware-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch manifest
+        env:
+          MANIFEST_URL: ${{ inputs.manifest }}
+        run: curl --fail --proto '=https' "$MANIFEST_URL" -o firmware-manifest.json
+      - run: node tools/publish-update.mjs firmware-manifest.json
+        env:
+          UPDATE_PUBLISH_TOKEN: ${{ secrets.UPDATE_PUBLISH_TOKEN }}

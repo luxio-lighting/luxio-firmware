@@ -1,0 +1,30 @@
+name: Firmware
+on:
+  pull_request:
+  push:
+    tags: ['firmware-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - run: tools/bootstrap-firmware.sh
+      - name: Build complete firmware and enforce recovery/application partition sizes
+        env:
+          LUXIO_BUILD: ${{ github.run_number }}
+          LUXIO_MATTER: '1'
+        run: tools/build-firmware.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32s3-${{ github.run_number }}
+          path: build/release/*
+      # Publication stays blocked until Matter and Luxio GATT coexist and the
+      # recovery layout passes resilience tests. Never publish the Matter-disabled diagnostic.
+      - name: Release validation gate
+        run: |
+          echo 'Release blocked: complete Matter/GATT integration and hardware qualification (docs/release-status.md).'
+          exit 1

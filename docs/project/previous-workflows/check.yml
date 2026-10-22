@@ -1,0 +1,41 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npm run build --workspace @luxio-lighting/cli
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec apps/ios/project.yml
+      - run: xcodebuild -project apps/ios/Luxio.xcodeproj -scheme Luxio -sdk iphonesimulator -derivedDataPath apps/ios/DerivedData CODE_SIGNING_ALLOWED=NO build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci && node --import tsx tools/test-swift-codec.ts
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: mkdir -p .sdk && keytool -genkeypair -keystore .sdk/android-debug.keystore -storepass android -keypass android -alias androiddebugkey -dname 'CN=Android Debug,O=Android,C=US' -keyalg RSA -validity 10000
+      - run: cd apps/android && ./gradlew --no-daemon testDebugUnitTest assembleDebug

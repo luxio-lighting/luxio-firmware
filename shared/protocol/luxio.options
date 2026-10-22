@@ -1,0 +1,16 @@
+luxio.Config.name max_size:64
+luxio.Config.strip_type max_size:8
+luxio.Wifi.ssid max_size:33
+luxio.Wifi.password max_size:65
+luxio.Script.id max_size:37
+luxio.Script.name max_size:64
+luxio.Script.source max_size:16385
+luxio.State.device_id max_size:65
+luxio.State.active_script_id max_size:37
+luxio.State.lan_ip max_size:46
+luxio.Request.script_id max_size:37
+luxio.Response.error max_size:160
+luxio.Response.pairing_code max_size:32
+luxio.Response.pairing_qr max_size:128
+luxio.Response.scripts type:FT_CALLBACK
+luxio.Response.update_error max_size:160

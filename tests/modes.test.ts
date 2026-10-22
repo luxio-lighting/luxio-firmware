@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Device } from '../shared/device/src/device.js';
+import { encodeResponse, decodeResponse, colorSchema } from '../shared/protocol/src/index.js';
+
+test('firmware modes separate held gradients from animated Lua and preserve brightness arbitration', () => {
+  const device = new Device('test');
+  const source = 'function setup() luxio_set_pixel_color(0,255,0,0) end function loop() luxio_set_pixel_color(0,0,0,255) end';
+  const gradient = device.handle({ id: 1, operation: 7, script: { id: '', name: 'Still', source, mode: 1 } }).script!;
+  const moving = device.handle({ id: 2, operation: 7, script: { id: '', name: 'Moving', source, mode: 2 } }).script!;
+  device.handle({ id: 3, operation: 2, brightness: 255 });
+  device.handle({ id: 4, operation: 10, scriptId: gradient.id });
+  assert.equal(device.state.mode, 1);
+  assert.equal(decodeResponse(encodeResponse({ state: device.state })).state!.mode, 1);
+  for (let frame = 0; frame < 10; frame++) assert.equal(device.output()[0].red, 255, 'Gradient must never execute loop');
+  device.handle({ id: 5, operation: 2, brightness: 16 });
+  assert.equal(device.state.mode, 1);
+  assert.equal(device.output()[0].red, 16);
+  device.handle({ id: 6, operation: 10, scriptId: moving.id });
+  assert.equal(device.state.mode, 2);
+  assert.equal(device.output()[0].blue, 16);
+  device.handle({ id: 7, operation: 2, brightness: 0 });
+  assert.equal(device.state.mode, 2);
+  device.handle({ id: 8, operation: 1, color: colorSchema.parse({ warmWhite: 255 }) });
+  assert.equal(device.state.mode, 0); assert.equal(device.state.activeScriptId, '');
+  device.handle({ id: 9, operation: 10, scriptId: gradient.id });
+  device.handle({ id: 10, operation: 11 });
+  assert.equal(device.state.mode, 0);
+  device.handle({ id: 11, operation: 10, scriptId: gradient.id });
+  device.handle({ id: 12, operation: 9, scriptId: gradient.id });
+  assert.equal(device.state.mode, 0);
+});
+
+test('legacy scripts remain animations; invalid modes fail; mode metadata survives rename and listing', () => {
+  const device = new Device('test');
+  const source = 'function setup() end function loop() end';
+  const legacy = device.handle({ id: 1, operation: 7, script: { id: '', name: 'Legacy', source } }).script!;
+  assert.equal(legacy.mode, 2);
+  device.handle({ id: 2, operation: 10, scriptId: legacy.id });
+  assert.equal(device.state.mode, 2);
+  assert.ok(device.handle({ id: 3, operation: 7, script: { id: '', name: 'Bad mode', source, mode: 9 } }).error);
+  const gradient = device.handle({ id: 4, operation: 8, script: { ...legacy, name: 'Renamed', mode: 1 } }).script!;
+  assert.equal(gradient.id, legacy.id);
+  assert.equal(device.handle({ id: 5, operation: 5 }).scripts![0].mode, 1);
+  device.handle({ id: 6, operation: 10, scriptId: legacy.id });
+  assert.equal(device.state.mode, 1);
+  const restored = new Device('test', { state: structuredClone(device.state), scripts: device.scripts });
+  assert.equal(restored.state.mode, 0);
+  assert.equal(restored.scripts[0].mode, 1);
+});
