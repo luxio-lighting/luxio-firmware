@@ -5,11 +5,12 @@ import { Device } from '../shared/device/src/device.js';
 import { Animation } from '../shared/device/src/lua.js';
 import { presets } from '../shared/web/presets.js';
 
-test('Protobuf roundtrips independent RGBCCT channels and zero brightness', () => {
+test('Protobuf roundtrips independent RGBCCT channels and independent power', () => {
   const request = { id: 42, operation: 1, color: colorSchema.parse({ red: 23, green: 51, blue: 82, warmWhite: 131, coolWhite: 219 }) };
   const decoded = decodeRequest(encodeRequest(request));
   assert.deepEqual(decoded.color, request.color);
-  assert.equal(decodeRequest(encodeRequest({ id: 1, operation: 2, brightness: 0 })).brightness, 0);
+  assert.equal(decodeRequest(encodeRequest({ id: 1, operation: 2, brightness: 256 })).brightness, 256);
+  assert.equal(decodeRequest(encodeRequest({ id: 2, operation: 15, on: false })).on, false);
   const response = decodeResponse(encodeResponse({ id: 42, error: 'No such script' }));
   assert.equal(response.id, 42); assert.equal(response.error, 'No such script');
 });
@@ -31,7 +32,7 @@ test('script UUID survives rename; brightness preserves animation; explicit colo
   assert.ok(create.script); const id = create.script.id;
   assert.equal(device.handle({ id: 2, operation: 10, scriptId: id }).error, undefined);
   assert.equal(device.state.activeScriptId, id);
-  device.handle({ id: 3, operation: 2, brightness: 0 });
+  device.handle({ id: 3, operation: 15, on: false });
   assert.equal(device.state.activeScriptId, id);
   assert.ok(device.output().every(pixel => Object.values(pixel).every(value => value === 0)));
   const update = device.handle({ id: 4, operation: 8, script: { ...create.script, name: 'Renamed' } });

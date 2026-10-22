@@ -2,6 +2,7 @@
 """Package exact flash parts; never merge blank padding over user NVS/scripts."""
 import hashlib
 import json
+import struct
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
@@ -13,6 +14,15 @@ build = int(raw[48:80].rstrip(b'\0'))
 assert 0 < len(raw) <= 0x280000
 assert 0 < loader.stat().st_size <= 0x120000
 assert (root/'build/main/Luxio.ino.partitions.bin').read_bytes() == (root/'build/recovery/Recovery.ino.partitions.bin').read_bytes()
+partitions = (root/'build/main/Luxio.ino.partitions.bin').read_bytes()
+applications = []
+for offset in range(0, len(partitions) - 31, 32):
+    magic, kind, subtype, address, size, label, flags = struct.unpack_from('<HBBII16sI', partitions, offset)
+    if magic != 0x50aa:
+        break
+    if kind == 0:
+        applications.append((subtype, address, size, label.rstrip(b'\0')))
+assert applications == [(0, 0x10000, 0x120000, b'loader'), (0x10, 0x130000, 0x280000, b'app0')], 'Only the fixed recovery loader and single main application layout can be packaged'
 output = root/'build/release'
 output.mkdir(parents=True, exist_ok=True)
 parts = []
@@ -26,7 +36,7 @@ for path, name, address, capacity in [
     assert len(data) <= capacity
     (output/name).write_bytes(data)
     parts.append(dict(file=name, address=address, size=len(data), sha256=hashlib.sha256(data).hexdigest()))
-# Explicitly reset boot selection to factory for a USB layout migration.
+# Start USB installations in the recovery loader, which validates the main app.
 # This touches only otadata, never NVS or the filesystem.
 blank = bytes([255])*0x2000
 (output/'otadata.bin').write_bytes(blank)

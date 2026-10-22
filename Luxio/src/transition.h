@@ -19,7 +19,7 @@ struct OutputTransition {
     active = true;
   }
 
-  void render(const uint8_t pixels[][6], uint32_t count, uint8_t brightness, uint32_t now, bool identify = false) {
+  void render(const uint8_t pixels[][6], uint32_t count, uint16_t brightness, uint32_t now, bool identify = false) {
     if (identify != identifying) {
       begin(now);
       identifying = identify;
@@ -40,7 +40,7 @@ struct OutputTransition {
     }
     for (uint32_t i = 0; i < count; i++) {
       for (int c = 0; c < 6; c++) {
-        uint8_t target = (uint16_t(pixels[i][c]) * brightness + 127) / 255;
+        uint8_t target = (uint16_t(pixels[i][c]) * brightness + 128) / 256;
         if (identifying) target = c < 3 ? identifyLevel : 0;
         displayed[i][c] = active ? uint8_t(origin[i][c] + (int(target) - origin[i][c]) * blend + 0.5f) : target;
       }

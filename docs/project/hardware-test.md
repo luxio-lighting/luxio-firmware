@@ -87,3 +87,12 @@ A fresh private full-flash backup, including current Matter fabrics, was saved a
 The user confirmed Apple Home re-pairing and the build 8 Identify effect work. Build 9 sets Matter Basic Information VendorName to `Luxio Lighting` and ProductName to `DIY` through the device-instance information provider. Other factory metadata is delegated to the existing provider, retaining vendor/product IDs, serial identity and commissioning/attestation behavior. The provider is installed under the Matter stack lock after SDK initialization.
 
 Firmware compiled and packaged successfully (2,257,792 bytes; SHA-256 `0627d9cc6f7bcf038ba72bfe483a383bc965a81a181ecaccf81fa7459cbf5fdf`). A fresh full-flash backup of the re-paired device is saved privately in `.sdk/before-metadata-flash.bin`. Application-only USB flashing verified successfully. Build 9 is online and its Luxio identity, configuration, brightness and color match the pre-update snapshot. The Apple Home display of the new text has not been independently observed.
+
+
+## Independent power — 22 October 2026
+
+Build 11 is installed on the LOLIN S3 Mini. Only the application partition was updated after a private full-flash backup. The nine saved script IDs, identity and strip configuration were preserved.
+
+Physical tests passed: separate boolean power; brightness boundaries 1 and 256 while off; rejection of 0 and 257; solid color, gradient and animation commands turn on at level 16; power toggles preserve mode and brightness; failed script commands leave power off. A further USB reset preserved `on=false` and brightness 23; the next color command turned on at level 23. Tests removed their temporary record and restored the original output.
+
+Luxio iOS 0.1.7 (8), with separate power controls and the new brightness range, was signed and installed on the iPhone 16 Pro. CLI on/off and brightness boundary checks passed. Android protocol compatibility and its independent power control built and passed unit tests; no Android device installation was performed.

@@ -8,21 +8,21 @@ int main() {
   pixels[0][0] = 255;
   pixels[1023][4] = 255;
   fade.begin(100);
-  fade.render(pixels, 1024, 255, 100);
+  fade.render(pixels, 1024, 256, 100);
   assert(fade.displayed[0][0] == 0);
-  fade.render(pixels, 1024, 255, 350);
+  fade.render(pixels, 1024, 256, 350);
   assert(fade.displayed[0][0] == 128 && fade.displayed[1023][4] == 128);
   assert(fade.displayed[0][3] == 0 && fade.displayed[0][4] == 0);
-  fade.render(pixels, 1024, 255, 600);
+  fade.render(pixels, 1024, 256, 600);
   assert(fade.displayed[0][0] == 255 && !fade.active);
   // Interrupt a color fade with another command: preserve the visible frame.
   pixels[0][0] = 0; pixels[0][2] = 255;
-  fade.begin(600); fade.render(pixels, 1024, 255, 850);
+  fade.begin(600); fade.render(pixels, 1024, 256, 850);
   const auto red = fade.displayed[0][0], blue = fade.displayed[0][2];
   fade.begin(850); pixels[0][1] = 255;
-  fade.render(pixels, 1024, 255, 850);
+  fade.render(pixels, 1024, 256, 850);
   assert(fade.displayed[0][0] == red && fade.displayed[0][2] == blue && fade.displayed[0][1] == 0);
-  fade.render(pixels, 1024, 255, 1350);
+  fade.render(pixels, 1024, 256, 1350);
   assert(fade.displayed[0][0] == 0 && fade.displayed[0][1] == 255 && fade.displayed[0][2] == 255);
   // Power off fades monotonically and reaches exact black.
   fade.begin(1400);
@@ -38,7 +38,7 @@ int main() {
   pixels[0][1] = 0; fade.render(pixels, 1024, 16, 2533);
   assert(fade.displayed[0][1] == 0);
   // Unsigned millis wraparound still completes a fade.
-  fade.begin(UINT32_MAX - 100); fade.render(pixels, 1024, 255, 399);
+  fade.begin(UINT32_MAX - 100); fade.render(pixels, 1024, 256, 399);
   assert(!fade.active && fade.displayed[0][2] == 255);
   // Identify must be visible while off, without changing the underlying frame.
   OutputTransition identify;

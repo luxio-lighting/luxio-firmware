@@ -1,6 +1,6 @@
 # Manual updates with a recovery loader
 
-The selected architecture is option B: one fixed factory application for Wi-Fi/HTTPS recovery, plus one larger Matter application. Firmware no longer depends on two full A/B application slots. The existing NVS, script filesystem and core-dump addresses are retained.
+Recovery is the only update architecture: one fixed factory application for Wi-Fi/HTTPS recovery and one Matter application. NVS, the script filesystem and core dumps have separate partitions.
 
 ## Update flow
 
@@ -27,17 +27,17 @@ The loader also advertises `_luxio-recovery._tcp` on the LAN. Its Wi-Fi credenti
 
 The project still permits TLS without certificate verification and unsigned firmware, as specified in the brief. The saved SHA-256 checks transfer integrity; it is not a signature or publisher authentication.
 
-## Flash layout and USB migration
+## Flash layout and USB installation
 
 See `Luxio/partitions.csv`. Factory loader: `0x10000`, size `0x120000`; main app: `0x130000`, size `0x280000`. The loader only writes the latter. Compilation and packaging enforce both capacities.
 
-The initial migration from the old A/B layout is a USB operation. Save a full 4 MiB backup first. Flash the exact files and offsets in `build/release/manifest.local.json`; do not perform a full erase and do not use a padded merged image. The explicit erased `otadata.bin` selects the factory loader, which validates and starts the pre-flashed main app. If a startup loop prevents software USB reset, hold BOOT, press/release RESET, then release BOOT to enter the ROM loader.
+Initial installation uses USB. Save a full flash backup before replacing existing firmware. Flash the exact files and offsets in `build/release/manifest.local.json`; do not perform a full erase and do not use a padded merged image. The explicit erased `otadata.bin` selects the factory loader, which validates and starts the pre-flashed main app. If a startup loop prevents software USB reset, hold BOOT, press/release RESET, then release BOOT to enter the ROM loader.
 
-Normal update publication uses `luxio.bin` and `target: "esp32s3-recovery-v1"`. Browser first-install manifests include the bootloader, partition table, erased OTA selection, recovery app and main app. The API keeps legacy targets separate so pre-migration A/B devices cannot receive these images. Local package manifests contain filenames; hosting/publication must supply HTTPS URLs. No releases were published during implementation.
+Normal update publication uses `luxio.bin` and `target: "esp32s3-recovery-v1"`. Browser first-install manifests include the bootloader, partition table, erased OTA selection, recovery app and main app. The API requires an explicit recovery target matching the chip and never serves releases for any other layout. Missing or mismatched targets are rejected. Setup requests `<chip>-recovery-v1` for every supported chip; a chip without a published recovery package has no installable release. Local package manifests contain filenames; hosting/publication must supply HTTPS URLs. No releases were published during implementation.
 
 ## Verification
 
-`tools/test-update-job.cpp` checks malformed/oversized/persisted requests with address and undefined-behavior sanitizers. API tests verify target isolation, legacy compatibility and channel/build filtering. Cross-repository TypeScript, native iOS and both firmware builds are checked.
+`tools/test-update-job.cpp` checks malformed/oversized/persisted requests with address and undefined-behavior sanitizers. API tests verify recovery-only publication and lookup, rejection of missing or mismatched targets, exclusion of old database records, and channel/build filtering. Packaging checks the actual binary partition table for exactly one factory loader and one main application. `python3 tools/test-package-firmware.py` verifies valid packaging and rejection of incompatible layouts. Cross-repository TypeScript, native iOS and both firmware builds are checked.
 
 `tools/test-recovery-device.ts` is the opt-in hardware test. It expects a test build pointing at the Mac's HTTPS harness and a higher-numbered final firmware. It tests explicit check/install separation, truncated download, corrupt payload, manual retry, reset during writing, rebooted build, identity/settings/script preservation and availability of Matter pairing data. Runtime results are recorded separately in `hardware-test.md`; a successful build alone is not evidence these scenarios passed.
 

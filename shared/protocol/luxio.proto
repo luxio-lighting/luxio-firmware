@@ -19,6 +19,7 @@ enum Operation {
   GET_PAIRING_CODE = 12;
   CHECK_UPDATE = 13;
   INSTALL_UPDATE = 14;
+  SET_POWER = 15;
 }
 enum Mode {
   COLOR = 0;
@@ -51,6 +52,7 @@ message State {
   string active_script_id = 6;
   string lan_ip = 7;
   Mode mode = 8;
+  bool on = 9;
 }
 message Request {
   uint32 id = 1;
@@ -61,6 +63,8 @@ message Request {
   Wifi wifi = 6;
   Script script = 7;
   string script_id = 8;
+  uint32 script_offset = 9; // LIST_SCRIPTS continuation; zero starts a listing.
+  bool on = 10; // SET_POWER; brightness is independent (1–256).
 }
 message Response {
   uint32 id = 1;
@@ -73,4 +77,5 @@ message Response {
   uint32 available_build = 8;
   bool update_checking = 9;
   string update_error = 10;
+  uint32 next_script_offset = 11; // Zero means the last page.
 }

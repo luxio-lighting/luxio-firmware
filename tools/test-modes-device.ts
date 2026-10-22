@@ -6,7 +6,7 @@ if (!address) throw new Error('Set DEVICE_ADDRESS');
 let id = 1, scriptId: string | undefined;
 const current = (await requestHttp(address, { id: id++, operation: 0 })).state!;
 const initial = process.env.RESTORE_STATE_FILE ? JSON.parse(readFileSync(process.env.RESTORE_STATE_FILE, 'utf8')) : current;
-assert.equal(current.build, Number(process.env.TARGET_BUILD ?? 5));
+assert.equal(current.build, Number(process.env.TARGET_BUILD ?? 11));
 assert.equal(current.deviceId, initial.deviceId);
 assert.deepEqual(current.config, initial.config);
 try {
@@ -22,7 +22,7 @@ try {
   await new Promise(resolve => setTimeout(resolve, 1100));
   result = await requestHttp(address, { id: id++, operation: 0 });
   assert.equal(result.state!.mode, 1); assert.equal(result.state!.activeScriptId, scriptId);
-  result = await requestHttp(address, { id: id++, operation: 2, brightness: 0 });
+  result = await requestHttp(address, { id: id++, operation: 15, on: false });
   assert.equal(result.state!.mode, 1);
   console.log('PASS: Color → Gradient; setup-only execution; power off preserves Gradient');
   await requestHttp(address, { id: id++, operation: 8, script: { id: scriptId, name: 'Temporary firmware mode test', source: 'function setup() end function loop() for i=0,luxio_get_pixel_count()-1 do luxio_set_pixel_color(i,0,255,0) end end', mode: 2 } });
@@ -47,5 +47,6 @@ try {
   await requestHttp(address, { id: id++, operation: 1, color: initial.color });
   await requestHttp(address, { id: id++, operation: 2, brightness: initial.brightness });
   if (initial.activeScriptId) await requestHttp(address, { id: id++, operation: 10, scriptId: initial.activeScriptId });
+  await requestHttp(address, { id: id++, operation: 15, on: initial.on });
   console.log('Original strip state restored.');
 }

@@ -1,6 +1,6 @@
 # Luxio protocol
 
-`Luxio/luxio.proto` is the source of truth. Field numbers are stable. All color and brightness channels are unsigned integers 0–255. Strip types are exact strings `WS2805`, `WS2814`, `WS2812`. Config is a complete replacement, with LED/controller count 1–1024 and update channel 0–100. Names are at most 63 UTF-8 bytes on firmware. Board-reserved GPIOs are rejected for the qualified board profile.
+`Luxio/luxio.proto` is the source of truth. Field numbers are stable. Color channels are unsigned integers 0–255. Build 11 separates `State.on` (field 9, boolean) from `brightness` (1–256, never zero). `SET_POWER` (operation 15, `Request.on` field 10) changes power without changing brightness or the active mode. `SET_BRIGHTNESS` preserves power. Successful `SET_COLOR` and `RUN_SCRIPT` turn on without changing brightness; saving scripts does not turn on. Strip types are exact strings `WS2805`, `WS2814`, `WS2812`. Config is a complete replacement, with LED/controller count 1–1024 and update channel 0–100. Names are at most 63 UTF-8 bytes on firmware. Board-reserved GPIOs are rejected for the qualified board profile.
 
 ## Device transports
 
@@ -64,7 +64,7 @@ Registration: `POST /updates` with Bearer publication secret and JSON:
 }
 ```
 
-Channel defaults to 100. OTA downloads only the application into the inactive slot and verifies its SHA-256 before selecting it. Browser first-install downloads all flash parts and verifies each hash. Hashes detect corruption; firmware is not cryptographically signed, as specified. Firmware currently permits all server TLS certificates. These decisions are separate from signed device announcements.
+Channel defaults to 100. A user-requested update reboots into the fixed recovery loader, which downloads the application into its single main slot and verifies its SHA-256 before selecting it. Browser first-install downloads all recovery-layout flash parts and verifies each hash. Hashes detect corruption; firmware is not cryptographically signed, as specified. Firmware currently permits all server TLS certificates. These decisions are separate from signed device announcements.
 
 ## Browser networking
 
@@ -82,4 +82,4 @@ Device CORS/Private Network Access response headers are implemented. They cannot
 
 The application persists the accepted HTTPS URL, SHA-256, size, build and flash-layout target in one NVS blob, selects the fixed recovery loader, and reboots. The normal Protobuf API is offline during recovery. The loader exposes HTTP `GET /status`, `POST /retry`, and `POST /update` on port 80. Its replacement-update JSON requires `target: "esp32s3-recovery-v1"`, `url`, `sha256`, `size`, and `build`. Normal firmware updates never write the loader, partition table, NVS or script filesystem.
 
-The cloud `/updates` query includes `target=esp32s3-recovery-v1`; clients omitting target receive only legacy `ab-v1` images. There is no timer or boot-time path that checks for or installs new releases. A loader reboot resumes only the persisted request that the user already accepted.
+The cloud `/updates` query requires `target=esp32s3-recovery-v1` for ESP32-S3. Only recovery targets matching their chip are accepted; omitted targets and other layouts are rejected. There is no timer or boot-time path that checks for or installs new releases. A loader reboot resumes only the persisted request that the user already accepted.

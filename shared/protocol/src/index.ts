@@ -21,9 +21,9 @@ export const scriptSchema = z.object({ id: z.uuid(), name: z.string().trim().min
 export type Color = z.infer<typeof colorSchema>;
 export type Config = z.infer<typeof configSchema>;
 export type Script = { id: string; name: string; source: string; mode?: number };
-export interface State { deviceId: string; build: number; config: Config; brightness: number; color: Color; activeScriptId: string; lanIp: string; mode?: number }
-export interface Request { id: number; operation: number; color?: Color; brightness?: number; config?: Config; wifi?: { ssid: string; password: string }; script?: Script; scriptId?: string }
-export interface Response { id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string }
+export interface State { deviceId: string; build: number; config: Config; brightness: number; on: boolean; color: Color; activeScriptId: string; lanIp: string; mode?: number }
+export interface Request { id: number; operation: number; color?: Color; brightness?: number; on?: boolean; config?: Config; wifi?: { ssid: string; password: string }; script?: Script; scriptId?: string; scriptOffset?: number }
+export interface Response { id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string; nextScriptOffset?: number }
 
 export function encodeRequest(request: Request): Uint8Array {
   const error = RequestMessage.verify(request);
@@ -80,14 +80,22 @@ export async function requestHttp(address: string, request: Request): Promise<Re
   const url = new URL(address.includes('://') ? address : `http://${address}`);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid device address');
   url.pathname = '/api'; url.search = ''; url.hash = '';
-  const response = await fetch(url, {
-    method: 'POST', headers: { 'Content-Type': 'application/x-protobuf' },
-    body: encodeRequest(request) as BodyInit, signal: AbortSignal.timeout(10000),
-    ...({ targetAddressSpace: 'local' } as object),
-  });
-  if (!response.ok) throw new Error(`Device returned HTTP ${response.status}`);
-  const result = decodeResponse(new Uint8Array(await response.arrayBuffer()));
-  if (result.id !== request.id) throw new Error('Device returned a mismatched request ID');
-  if (result.error) throw new Error(result.error);
-  return result;
+  const scripts: Script[] = [];
+  let offset = request.scriptOffset ?? 0;
+  while (true) {
+    const response = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-protobuf' },
+      body: encodeRequest({ ...request, scriptOffset: offset }) as BodyInit, signal: AbortSignal.timeout(10000),
+      ...({ targetAddressSpace: 'local' } as object),
+    });
+    if (!response.ok) throw new Error(`Device returned HTTP ${response.status}`);
+    const result = decodeResponse(new Uint8Array(await response.arrayBuffer()));
+    if (result.id !== request.id) throw new Error('Device returned a mismatched request ID');
+    if (result.error) throw new Error(result.error);
+    if (request.operation !== 5) return result;
+    scripts.push(...result.scripts);
+    if (!result.nextScriptOffset) return { ...result, scripts, nextScriptOffset: 0 };
+    if (result.nextScriptOffset <= offset || !result.scripts.length) throw new Error('Invalid script listing continuation');
+    offset = result.nextScriptOffset;
+  }
 }

@@ -8,7 +8,12 @@ export class Device {
   scripts: Script[];
   animation?: Animation;
   constructor(deviceId: string, saved?: { state: State; scripts: Script[] }) {
-    this.state = saved?.state ?? { deviceId, build: 1, config: { name: 'Luxio development light', stripType: 'WS2805', ledCount: 60, gpio: 4, channel: 100 }, brightness: 180, color: colorSchema.parse({}), activeScriptId: '', lanIp: '127.0.0.1' };
+    this.state = saved?.state ?? { deviceId, build: 11, config: { name: 'Luxio development light', stripType: 'WS2805', ledCount: 60, gpio: 4, channel: 100 }, brightness: 180, on: true, color: colorSchema.parse({}), activeScriptId: '', lanIp: '127.0.0.1' };
+    if (this.state.on === undefined) {
+      this.state.on = this.state.brightness > 0;
+      this.state.brightness = this.state.brightness ? Math.round(this.state.brightness * 256 / 255) : 16;
+    }
+    this.state.build = 11;
     this.state.deviceId = deviceId;
     this.state.activeScriptId = ''; this.state.mode = 0;
     this.scripts = saved?.scripts.map(script => scriptSchema.parse(script)) ?? [];
@@ -21,10 +26,11 @@ export class Device {
           const color = colorSchema.parse(request.color);
           const type = this.state.config.stripType;
           if ((type === 'WS2812' && (color.white || color.warmWhite || color.coolWhite)) || (type === 'WS2814' && (color.warmWhite || color.coolWhite)) || (type === 'WS2805' && color.white)) throw new Error('Channel unavailable on this strip type');
-          this.animation?.close(); this.animation = undefined; this.state.activeScriptId = ''; this.state.mode = 0; this.state.color = color;
+          this.animation?.close(); this.animation = undefined; this.state.activeScriptId = ''; this.state.mode = 0; this.state.color = color; this.state.on = true;
           break;
         }
-        case 2: this.state.brightness = z.number().int().min(0).max(255).parse(request.brightness); break;
+        case 2: this.state.brightness = z.number().int().min(1).max(256).parse(request.brightness); break;
+        case 15: this.state.on = z.boolean().parse(request.on ?? false); break;
         case 3: {
           const config = configSchema.parse(request.config);
           if (config.stripType !== this.state.config.stripType || config.ledCount !== this.state.config.ledCount || config.gpio !== this.state.config.gpio) {
@@ -33,14 +39,17 @@ export class Device {
           this.state.config = config; break;
         }
         case 4: throw new Error('Wi-Fi configuration requires a physical device');
-        case 5: return { id: request.id, scripts: this.scripts.map(({ id, name, mode }) => ({ id, name, source: '', mode })) };
+        case 5: {
+          const offset = request.scriptOffset ?? 0;
+          if (!Number.isInteger(offset) || offset < 0) throw new Error('Invalid script offset');
+          return { id: request.id, scripts: this.scripts.slice(offset, offset + 64).map(({ id, name, mode }) => ({ id, name, source: '', mode })), nextScriptOffset: offset + 64 < this.scripts.length ? offset + 64 : 0 };
+        }
         case 6: {
           const script = this.scripts.find(script => script.id === request.scriptId);
           if (!script) throw new Error('Script not found');
           return { id: request.id, script };
         }
         case 7: {
-          if (this.scripts.length >= 32) throw new Error('Script storage is full (32 scripts)');
           const script = scriptSchema.parse({ ...request.script, id: randomUUID() });
           if (Buffer.byteLength(script.source) > 16384) throw new Error('Script exceeds 16 KiB');
           this.scripts.push(script); return { id: request.id, script };
@@ -63,7 +72,7 @@ export class Device {
           if (!script) throw new Error('Script not found');
           const animation = new Animation(script.source, this.state.config.ledCount, this.state.config.stripType);
           this.animation?.close(); this.animation = animation; this.state.activeScriptId = script.id;
-          this.state.mode = script.mode === 1 ? 1 : 2;
+          this.state.mode = script.mode === 1 ? 1 : 2; this.state.on = true;
           if (this.state.mode === 1) animation.close();
           break;
         }
@@ -77,6 +86,6 @@ export class Device {
   }
   output(): Color[] {
     const pixels = this.animation?.tick() ?? Array.from({ length: this.state.config.ledCount }, () => this.state.color);
-    return pixels.map(pixel => Object.fromEntries(Object.entries(pixel).map(([channel, value]) => [channel, Math.round(value * this.state.brightness / 255)])) as Color);
+    return pixels.map(pixel => Object.fromEntries(Object.entries(pixel).map(([channel, value]) => [channel, this.state.on ? Math.round(value * this.state.brightness / 256) : 0])) as Color);
   }
 }

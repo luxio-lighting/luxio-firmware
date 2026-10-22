@@ -7,6 +7,8 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include "update_job.h"
+#include "script_storage.h"
+#include <memory>
 #include <esp_http_server.h>
 #include <esp_ota_ops.h>
 #include <driver/gpio.h>
@@ -73,7 +75,7 @@ static void stopAnimation() {
   animation = nullptr; luaMemory = 0; state.active_script_id[0] = 0; state.mode = luxio_Mode_COLOR;
 }
 static void render() {
-  transition.render(pixels, state.config.led_count, state.brightness, millis(), identifyActive);
+  transition.render(pixels, state.config.led_count, state.on ? state.brightness : 0, millis(), identifyActive);
   const bool rgbcct = !strcmp(state.config.strip_type, "WS2805");
   const bool rgbw = !strcmp(state.config.strip_type, "WS2814");
   const int channels = rgbcct ? 5 : rgbw ? 4 : 3;
@@ -154,19 +156,24 @@ static bool validId(const char *id) {
   for (int i = 0; i < 36; i++) if ((i == 8 || i == 13 || i == 18 || i == 23) ? id[i] != '-' : !isxdigit(id[i])) return false;
   return true;
 }
-static bool listScripts(pb_ostream_t *stream, const pb_field_t *field, void * const *) {
+struct ScriptPage { uint32_t offset; uint32_t *next; };
+static bool listScripts(pb_ostream_t *stream, const pb_field_t *field, void * const *arg) {
+  auto &page = *static_cast<ScriptPage *>(*arg);
+  *page.next = 0;
   File directory = LittleFS.open("/scripts");
   if (!directory) return true;
+  uint32_t index = 0, count = 0;
   for (File file = directory.openNextFile(); file; file = directory.openNextFile()) {
     if (!String(file.name()).endsWith(".pb")) continue;
-    auto *script = new luxio_Script{};
-    size_t length = file.size(); auto *bytes = new uint8_t[length]; file.read(bytes, length);
-    auto input = pb_istream_from_buffer(bytes, length);
-    bool valid = pb_decode(&input, luxio_Script_fields, script); delete[] bytes;
-    script->source[0] = 0;
-    bool ok = valid && pb_encode_tag_for_field(stream, field) && pb_encode_submessage(stream, luxio_Script_fields, script);
-    delete script;
-    if (!ok) return false;
+    if (index++ < page.offset) continue;
+    if (count == 64) { *page.next = page.offset + count; break; }
+    std::unique_ptr<luxio_Script> script(new (std::nothrow) luxio_Script{});
+    const size_t length = file.size();
+    if (!script || !length || length > SCRIPT_RECORD_MAX) return false;
+    std::unique_ptr<uint8_t[]> bytes(new (std::nothrow) uint8_t[length]);
+    if (!bytes || file.read(bytes.get(), length) != length || !decodeStoredScript(bytes.get(), length, *script, true)) return false;
+    if (!pb_encode_tag_for_field(stream, field) || !pb_encode_submessage(stream, luxio_Script_fields, script.get())) return false;
+    count++;
   }
   return true;
 }
@@ -178,6 +185,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
   bool decoded = pb_decode(&decoder, luxio_Request_fields, request);
   response->id = request->id;
   String error;
+  ScriptPage page{request->script_offset, &response->next_script_offset};
   if (!decoded) error = "Invalid Protobuf request";
   else switch (request->operation) {
     case luxio_Operation_GET_STATE: break;
@@ -185,12 +193,15 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       auto &c = request->color;
       if (!request->has_color || c.red > 255 || c.green > 255 || c.blue > 255 || c.white > 255 || c.warm_white > 255 || c.cool_white > 255) { error = "Invalid color"; break; }
       if ((!strcmp(state.config.strip_type, "WS2805") && c.white) || (!strcmp(state.config.strip_type, "WS2814") && (c.warm_white || c.cool_white)) || (!strcmp(state.config.strip_type, "WS2812") && (c.white || c.warm_white || c.cool_white))) { error = "Channel unavailable on this strip type"; break; }
-      stopAnimation(); state.color = c; applyColor(); dirty = true; break;
+      stopAnimation(); state.color = c; state.on = true; applyColor(); dirty = true; break;
     }
     case luxio_Operation_SET_BRIGHTNESS:
-      if (request->brightness > 255) error = "Brightness must be 0-255";
+      if (request->brightness < 1 || request->brightness > 256) error = "Brightness must be 1-256";
       else { if (state.brightness != request->brightness) transition.begin(millis()); state.brightness = request->brightness; dirty = true; }
       break;
+    case luxio_Operation_SET_POWER:
+      if (state.on != request->on) transition.begin(millis());
+      state.on = request->on; dirty = true; break;
     case luxio_Operation_SET_CONFIG: {
       auto &c = request->config;
       String name = c.name; name.trim();
@@ -213,7 +224,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       if (!request->has_wifi || !strlen(request->wifi.ssid)) error = "Wi-Fi SSID is required";
       else { prefs.putString("ssid", request->wifi.ssid); prefs.putString("password", request->wifi.password); wifiSsid = request->wifi.ssid; wifiPassword = request->wifi.password; wifiPending = true; }
       break;
-    case luxio_Operation_LIST_SCRIPTS: response->scripts.funcs.encode = listScripts; break;
+    case luxio_Operation_LIST_SCRIPTS: response->scripts.funcs.encode = listScripts; response->scripts.arg = &page; break;
     case luxio_Operation_CREATE_SCRIPT:
     case luxio_Operation_UPDATE_SCRIPT: {
       auto &script = request->script;
@@ -222,19 +233,24 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       if (script.mode == luxio_Mode_COLOR) script.mode = luxio_Mode_ANIMATION;
       if (!request->has_script || !strlen(script.name) || !strlen(script.source)) { error = "Script name and source are required"; break; }
       if (request->operation == luxio_Operation_CREATE_SCRIPT) {
-        int count = 0; File directory = LittleFS.open("/scripts");
-        if (directory) for (File file = directory.openNextFile(); file; file = directory.openNextFile()) if (String(file.name()).endsWith(".pb")) count++;
-        if (count >= 32) { error = "Script storage is full"; break; }
         uint8_t uuid[16]; esp_fill_random(uuid, 16); uuid[6] = (uuid[6] & 15) | 64; uuid[8] = (uuid[8] & 63) | 128;
         snprintf(script.id, sizeof(script.id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", uuid[0],uuid[1],uuid[2],uuid[3],uuid[4],uuid[5],uuid[6],uuid[7],uuid[8],uuid[9],uuid[10],uuid[11],uuid[12],uuid[13],uuid[14],uuid[15]);
       } else if (!validId(script.id) || !LittleFS.exists((String("/scripts/") + script.id + ".pb").c_str())) { error = "Script not found"; break; }
-      auto encoder = pb_ostream_from_buffer(output, 32768);
-      if (!pb_encode(&encoder, luxio_Script_fields, &script)) { error = "Unable to encode script"; break; }
+      const size_t storedSize = encodeStoredScript(script, output, 32768);
+      if (!storedSize) { error = "Unable to encode script"; break; }
+      // LittleFS needs free blocks for atomic replacement and metadata updates.
+      if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 8192) { error = "Script storage is full; delete an animation or gradient"; break; }
       String path = String("/scripts/") + script.id + ".pb";
       File file = LittleFS.open("/scripts/pending", "w");
-      bool written = file && file.write(output, encoder.bytes_written) == encoder.bytes_written;
-      file.close();
-      if (!written || !LittleFS.rename("/scripts/pending", path)) { LittleFS.remove("/scripts/pending"); error = "Unable to save script (storage full)"; break; }
+      bool written = file && file.write(output, storedSize) == storedSize;
+      file.flush(); file.close();
+      // Verify the actual stored bytes before replacing an existing script.
+      File verify = LittleFS.open("/scripts/pending", "r");
+      written = written && verify && verify.size() == storedSize && verify.read(output, storedSize) == storedSize &&
+        decodeStoredScript(output, storedSize, response->script) && !strcmp(response->script.source, script.source) &&
+        !strcmp(response->script.id, script.id) && !strcmp(response->script.name, script.name) && response->script.mode == script.mode;
+      verify.close();
+      if (!written || !LittleFS.rename("/scripts/pending", path)) { LittleFS.remove("/scripts/pending"); error = "Unable to save script (storage full or write failed)"; break; }
       response->has_script = true; response->script = script; break;
     }
     case luxio_Operation_GET_SCRIPT:
@@ -248,13 +264,13 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
         if (!LittleFS.remove(path)) error = "Unable to delete script"; break;
       }
       File file = LittleFS.open(path, "r"); size_t size = file.size();
-      if (size > 32768 || file.read(output, size) != size) { error = "Unable to read script"; break; }
-      auto decoder = pb_istream_from_buffer(output, size);
-      if (!pb_decode(&decoder, luxio_Script_fields, &response->script)) { error = "Invalid saved script"; break; }
+      if (!size || size > SCRIPT_RECORD_MAX || file.read(output, size) != size) { error = "Unable to read script"; break; }
+      if (!decodeStoredScript(output, size, response->script)) { error = "Invalid saved script"; break; }
       if (request->operation == luxio_Operation_GET_SCRIPT) response->has_script = true;
       else {
         error = startAnimation(response->script.source);
         if (!error.length()) {
+          state.on = true; dirty = true;
           strlcpy(state.active_script_id, request->script_id, sizeof(state.active_script_id));
           state.mode = response->script.mode == luxio_Mode_GRADIENT ? luxio_Mode_GRADIENT : luxio_Mode_ANIMATION;
           if (state.mode == luxio_Mode_GRADIENT) {
@@ -300,6 +316,13 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
   else { response->has_state = true; response->state = state; strlcpy(response->state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(response->state.lan_ip)); }
   auto encoder = pb_ostream_from_buffer(output, 32768);
   size_t size = pb_encode(&encoder, luxio_Response_fields, response) ? encoder.bytes_written : 0;
+  if (!size) {
+    *response = luxio_Response_init_zero;
+    response->id = request->id;
+    strlcpy(response->error, "Unable to read saved scripts", sizeof(response->error));
+    encoder = pb_ostream_from_buffer(output, 32768);
+    size = pb_encode(&encoder, luxio_Response_fields, response) ? encoder.bytes_written : 0;
+  }
   delete request; delete response;
   xSemaphoreGive(stateMutex);
   return size;
@@ -462,11 +485,16 @@ void setup() {
   stateMutex = xSemaphoreCreateMutex();
   prefs.begin("luxio", false);
   state.build = LUXIO_BUILD; state.has_config = true; state.has_color = true;
-  state.config = {"Luxio", "WS2805", 1, 16, 0}; state.brightness = 16;
+  state.config = {"Luxio", "WS2805", 1, 16, 0}; state.brightness = 16; state.on = true;
   size_t savedSize = prefs.getBytesLength("state");
   if (savedSize && savedSize < 1024) {
     uint8_t saved[1024]; prefs.getBytes("state", saved, savedSize);
     auto decoder = pb_istream_from_buffer(saved, savedSize); pb_decode(&decoder, luxio_State_fields, &state);
+    if (state.build < 11) {
+      state.on = state.brightness > 0;
+      state.brightness = state.brightness ? (state.brightness * 256 + 127) / 255 : 16;
+    }
+    state.brightness = constrain(state.brightness, 1, 256);
     state.build = LUXIO_BUILD; state.active_script_id[0] = 0; state.mode = luxio_Mode_COLOR;
   }
   mbedtls_pk_init(&identity);
@@ -489,6 +517,7 @@ void setup() {
   // A fresh filesystem is formatted only when it has no existing mountable content.
   if (!LittleFS.begin(true)) abort();
   LittleFS.mkdir("/scripts");
+  LittleFS.remove("/scripts/pending"); // Discard an interrupted save; the original remains intact.
   symbols = reinterpret_cast<rmt_data_t *>(ps_malloc((1024 * 40 + 1) * sizeof(rmt_data_t)));
   if (!symbols) symbols = reinterpret_cast<rmt_data_t *>(malloc((1024 * 40 + 1) * sizeof(rmt_data_t)));
   if (!symbols || !rmtInit(state.config.gpio, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000)) abort();
@@ -502,7 +531,7 @@ void setup() {
   api.method = HTTP_OPTIONS; httpd_register_uri_handler(httpServer, &api);
   httpd_uri_t websocket = {}; websocket.uri = "/api/ws"; websocket.method = HTTP_GET; websocket.handler = websocketHandler; websocket.is_websocket = true; httpd_register_uri_handler(httpServer, &websocket);
 #if LUXIO_MATTER
-  if (!matterLight.begin(state.brightness > 0, {0, 0, 254}, constrain(state.brightness, 1, 254), 370)) abort();
+  if (!matterLight.begin(state.on, {0, 0, 254}, constrain((state.brightness * 254 + 128) / 256, 1, 254), 370)) abort();
   matterLight.onIdentify([](bool enabled) {
     xSemaphoreTake(stateMutex, portMAX_DELAY);
     identifyActive = enabled;
@@ -518,17 +547,20 @@ void setup() {
   chip::DeviceLayer::SetDeviceInstanceInfoProvider(&matterDeviceInfo);
   chip::DeviceLayer::PlatformMgr().UnlockChipStack();
   matterLight.onChangeBrightness([](uint8_t brightness) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY); if (state.brightness != brightness) transition.begin(millis()); state.brightness = brightness; dirty = true; xSemaphoreGive(stateMutex); return true;
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    uint32_t level = constrain((uint32_t(brightness) * 256 + 127) / 254, 1, 256);
+    if (state.brightness != level) transition.begin(millis());
+    state.brightness = level; dirty = true; xSemaphoreGive(stateMutex); return true;
   });
   matterLight.onChangeOnOff([](bool on) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY); transition.begin(millis()); state.brightness = on ? 180 : 0; dirty = true; xSemaphoreGive(stateMutex); return true;
+    xSemaphoreTake(stateMutex, portMAX_DELAY); transition.begin(millis()); state.on = on; dirty = true; xSemaphoreGive(stateMutex); return true;
   });
   matterLight.onChangeColorHSV([](espHsvColor_t hsv) {
     hsv.v = 255; auto rgb = espHsvColorToRgbColor(hsv);
-    xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.color = {rgb.r, rgb.g, rgb.b, 0, 0, 0}; applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
+    xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true; state.color = {rgb.r, rgb.g, rgb.b, 0, 0, 0}; applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
   });
   matterLight.onChangeColorTemperature([](uint16_t mired) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation();
+    xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true;
     uint32_t warm = constrain((int(mired) - 153) * 255 / (500 - 153), 0, 255);
     if (!strcmp(state.config.strip_type, "WS2805")) state.color = {0, 0, 0, 0, warm, 255 - warm};
     else if (!strcmp(state.config.strip_type, "WS2814")) state.color = {0, 0, 0, 255, 0, 0};

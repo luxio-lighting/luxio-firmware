@@ -25,7 +25,8 @@ typedef enum _luxio_Operation {
     luxio_Operation_STOP_SCRIPT = 11,
     luxio_Operation_GET_PAIRING_CODE = 12,
     luxio_Operation_CHECK_UPDATE = 13,
-    luxio_Operation_INSTALL_UPDATE = 14
+    luxio_Operation_INSTALL_UPDATE = 14,
+    luxio_Operation_SET_POWER = 15
 } luxio_Operation;
 
 typedef enum _luxio_Mode {
@@ -75,6 +76,7 @@ typedef struct _luxio_State {
     char active_script_id[37];
     char lan_ip[46];
     luxio_Mode mode;
+    bool on;
 } luxio_State;
 
 typedef struct _luxio_Request {
@@ -90,6 +92,8 @@ typedef struct _luxio_Request {
     bool has_script;
     luxio_Script script;
     char script_id[37];
+    uint32_t script_offset; /* LIST_SCRIPTS continuation; zero starts a listing. */
+    bool on; /* SET_POWER; brightness is independent (1–256). */
 } luxio_Request;
 
 typedef struct _luxio_Response {
@@ -105,6 +109,7 @@ typedef struct _luxio_Response {
     uint32_t available_build;
     bool update_checking;
     char update_error[160];
+    uint32_t next_script_offset; /* Zero means the last page. */
 } luxio_Response;
 
 
@@ -114,8 +119,8 @@ extern "C" {
 
 /* Helper constants for enums */
 #define _luxio_Operation_MIN luxio_Operation_GET_STATE
-#define _luxio_Operation_MAX luxio_Operation_INSTALL_UPDATE
-#define _luxio_Operation_ARRAYSIZE ((luxio_Operation)(luxio_Operation_INSTALL_UPDATE+1))
+#define _luxio_Operation_MAX luxio_Operation_SET_POWER
+#define _luxio_Operation_ARRAYSIZE ((luxio_Operation)(luxio_Operation_SET_POWER+1))
 
 #define _luxio_Mode_MIN luxio_Mode_COLOR
 #define _luxio_Mode_MAX luxio_Mode_ANIMATION
@@ -137,16 +142,16 @@ extern "C" {
 #define luxio_Config_init_default                {"", "", 0, 0, 0}
 #define luxio_Wifi_init_default                  {"", ""}
 #define luxio_Script_init_default                {"", "", "", _luxio_Mode_MIN}
-#define luxio_State_init_default                 {"", 0, false, luxio_Config_init_default, 0, false, luxio_Color_init_default, "", "", _luxio_Mode_MIN}
-#define luxio_Request_init_default               {0, _luxio_Operation_MIN, false, luxio_Color_init_default, 0, false, luxio_Config_init_default, false, luxio_Wifi_init_default, false, luxio_Script_init_default, ""}
-#define luxio_Response_init_default              {0, "", false, luxio_State_init_default, {{NULL}, NULL}, false, luxio_Script_init_default, "", "", 0, 0, ""}
+#define luxio_State_init_default                 {"", 0, false, luxio_Config_init_default, 0, false, luxio_Color_init_default, "", "", _luxio_Mode_MIN, 0}
+#define luxio_Request_init_default               {0, _luxio_Operation_MIN, false, luxio_Color_init_default, 0, false, luxio_Config_init_default, false, luxio_Wifi_init_default, false, luxio_Script_init_default, "", 0, 0}
+#define luxio_Response_init_default              {0, "", false, luxio_State_init_default, {{NULL}, NULL}, false, luxio_Script_init_default, "", "", 0, 0, "", 0}
 #define luxio_Color_init_zero                    {0, 0, 0, 0, 0, 0}
 #define luxio_Config_init_zero                   {"", "", 0, 0, 0}
 #define luxio_Wifi_init_zero                     {"", ""}
 #define luxio_Script_init_zero                   {"", "", "", _luxio_Mode_MIN}
-#define luxio_State_init_zero                    {"", 0, false, luxio_Config_init_zero, 0, false, luxio_Color_init_zero, "", "", _luxio_Mode_MIN}
-#define luxio_Request_init_zero                  {0, _luxio_Operation_MIN, false, luxio_Color_init_zero, 0, false, luxio_Config_init_zero, false, luxio_Wifi_init_zero, false, luxio_Script_init_zero, ""}
-#define luxio_Response_init_zero                 {0, "", false, luxio_State_init_zero, {{NULL}, NULL}, false, luxio_Script_init_zero, "", "", 0, 0, ""}
+#define luxio_State_init_zero                    {"", 0, false, luxio_Config_init_zero, 0, false, luxio_Color_init_zero, "", "", _luxio_Mode_MIN, 0}
+#define luxio_Request_init_zero                  {0, _luxio_Operation_MIN, false, luxio_Color_init_zero, 0, false, luxio_Config_init_zero, false, luxio_Wifi_init_zero, false, luxio_Script_init_zero, "", 0, 0}
+#define luxio_Response_init_zero                 {0, "", false, luxio_State_init_zero, {{NULL}, NULL}, false, luxio_Script_init_zero, "", "", 0, 0, "", 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define luxio_Color_red_tag                      1
@@ -174,6 +179,7 @@ extern "C" {
 #define luxio_State_active_script_id_tag         6
 #define luxio_State_lan_ip_tag                   7
 #define luxio_State_mode_tag                     8
+#define luxio_State_on_tag                       9
 #define luxio_Request_id_tag                     1
 #define luxio_Request_operation_tag              2
 #define luxio_Request_color_tag                  3
@@ -182,6 +188,8 @@ extern "C" {
 #define luxio_Request_wifi_tag                   6
 #define luxio_Request_script_tag                 7
 #define luxio_Request_script_id_tag              8
+#define luxio_Request_script_offset_tag          9
+#define luxio_Request_on_tag                     10
 #define luxio_Response_id_tag                    1
 #define luxio_Response_error_tag                 2
 #define luxio_Response_state_tag                 3
@@ -192,6 +200,7 @@ extern "C" {
 #define luxio_Response_available_build_tag       8
 #define luxio_Response_update_checking_tag       9
 #define luxio_Response_update_error_tag          10
+#define luxio_Response_next_script_offset_tag    11
 
 /* Struct field encoding specification for nanopb */
 #define luxio_Color_FIELDLIST(X, a) \
@@ -235,7 +244,8 @@ X(a, STATIC,   SINGULAR, UINT32,   brightness,        4) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  color,             5) \
 X(a, STATIC,   SINGULAR, STRING,   active_script_id,   6) \
 X(a, STATIC,   SINGULAR, STRING,   lan_ip,            7) \
-X(a, STATIC,   SINGULAR, UENUM,    mode,              8)
+X(a, STATIC,   SINGULAR, UENUM,    mode,              8) \
+X(a, STATIC,   SINGULAR, BOOL,     on,                9)
 #define luxio_State_CALLBACK NULL
 #define luxio_State_DEFAULT NULL
 #define luxio_State_config_MSGTYPE luxio_Config
@@ -249,7 +259,9 @@ X(a, STATIC,   SINGULAR, UINT32,   brightness,        4) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  config,            5) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  wifi,              6) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  script,            7) \
-X(a, STATIC,   SINGULAR, STRING,   script_id,         8)
+X(a, STATIC,   SINGULAR, STRING,   script_id,         8) \
+X(a, STATIC,   SINGULAR, UINT32,   script_offset,     9) \
+X(a, STATIC,   SINGULAR, BOOL,     on,               10)
 #define luxio_Request_CALLBACK NULL
 #define luxio_Request_DEFAULT NULL
 #define luxio_Request_color_MSGTYPE luxio_Color
@@ -267,7 +279,8 @@ X(a, STATIC,   SINGULAR, STRING,   pairing_code,      6) \
 X(a, STATIC,   SINGULAR, STRING,   pairing_qr,        7) \
 X(a, STATIC,   SINGULAR, UINT32,   available_build,   8) \
 X(a, STATIC,   SINGULAR, BOOL,     update_checking,   9) \
-X(a, STATIC,   SINGULAR, STRING,   update_error,     10)
+X(a, STATIC,   SINGULAR, STRING,   update_error,     10) \
+X(a, STATIC,   SINGULAR, UINT32,   next_script_offset,  11)
 #define luxio_Response_CALLBACK pb_default_field_callback
 #define luxio_Response_DEFAULT NULL
 #define luxio_Response_state_MSGTYPE luxio_State
@@ -296,9 +309,9 @@ extern const pb_msgdesc_t luxio_Response_msg;
 #define LUXIO_LUXIO_PB_H_MAX_SIZE                luxio_Request_size
 #define luxio_Color_size                         36
 #define luxio_Config_size                        92
-#define luxio_Request_size                       16783
+#define luxio_Request_size                       16791
 #define luxio_Script_size                        16493
-#define luxio_State_size                         297
+#define luxio_State_size                         299
 #define luxio_Wifi_size                          100
 
 #ifdef __cplusplus
