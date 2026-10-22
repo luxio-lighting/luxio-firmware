@@ -21,9 +21,10 @@ export const scriptSchema = z.object({ id: z.uuid(), name: z.string().trim().min
 export type Color = z.infer<typeof colorSchema>;
 export type Config = z.infer<typeof configSchema>;
 export type Script = { id: string; name: string; source: string; mode?: number };
+export interface WifiNetwork { ssid: string; rssi: number; passwordRequired: boolean }
 export interface State { deviceId: string; build: number; config: Config; brightness: number; on: boolean; color: Color; activeScriptId: string; lanIp: string; mode?: number }
 export interface Request { id: number; operation: number; color?: Color; brightness?: number; on?: boolean; config?: Config; wifi?: { ssid: string; password: string }; script?: Script; scriptId?: string; scriptOffset?: number }
-export interface Response { id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string; nextScriptOffset?: number }
+export interface Response { id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string; nextScriptOffset?: number; wifiNetworks?: WifiNetwork[]; wifiScanning?: boolean; wifiScanError?: string }
 
 export function encodeRequest(request: Request): Uint8Array {
   const error = RequestMessage.verify(request);

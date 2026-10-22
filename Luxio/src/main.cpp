@@ -1,6 +1,7 @@
 #include "transition.h"
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 #include <ESPmDNS.h>
@@ -63,6 +64,10 @@ static uint32_t luaDeadline, animationStarted, lastFrame, lastSave;
 static int luaInstructions;
 static bool dirty, wifiPending, rebootPending;
 static String wifiSsid, wifiPassword;
+static bool wifiScanning, wifiScanPending;
+static luxio_WifiNetwork wifiNetworks[32];
+static pb_size_t wifiNetworkCount;
+static String wifiScanError;
 static uint32_t availableBuild;
 static UpdateJob availableUpdate;
 static volatile bool checkUpdate;
@@ -224,6 +229,12 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       if (!request->has_wifi || !strlen(request->wifi.ssid)) error = "Wi-Fi SSID is required";
       else { prefs.putString("ssid", request->wifi.ssid); prefs.putString("password", request->wifi.password); wifiSsid = request->wifi.ssid; wifiPassword = request->wifi.password; wifiPending = true; }
       break;
+    case luxio_Operation_SCAN_WIFI:
+      if (!wifiScanning) {
+        wifiScanning = wifiScanPending = true;
+        wifiNetworkCount = 0; wifiScanError = "";
+      }
+      break;
     case luxio_Operation_LIST_SCRIPTS: response->scripts.funcs.encode = listScripts; response->scripts.arg = &page; break;
     case luxio_Operation_CREATE_SCRIPT:
     case luxio_Operation_UPDATE_SCRIPT: {
@@ -312,6 +323,12 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
   response->available_build = availableBuild;
   response->update_checking = updateChecking;
   strlcpy(response->update_error, updateError.c_str(), sizeof(response->update_error));
+  if (request->operation == luxio_Operation_GET_STATE || request->operation == luxio_Operation_SCAN_WIFI) {
+    response->wifi_scanning = wifiScanning;
+    response->wifi_networks_count = wifiNetworkCount;
+    memcpy(response->wifi_networks, wifiNetworks, wifiNetworkCount * sizeof(luxio_WifiNetwork));
+    strlcpy(response->wifi_scan_error, wifiScanError.c_str(), sizeof(response->wifi_scan_error));
+  }
   if (error.length()) strlcpy(response->error, error.c_str(), sizeof(response->error));
   else { response->has_state = true; response->state = state; strlcpy(response->state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(response->state.lan_ip)); }
   auto encoder = pb_ostream_from_buffer(output, 32768);
@@ -634,7 +651,51 @@ void loop() {
       if (pb_encode(&encoder, luxio_State_fields, &state)) prefs.putBytes("state", saved, encoder.bytes_written);
       lastSave = millis(); dirty = false;
     }
-    if (wifiPending) { wifiPending = false; WiFi.disconnect(); WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str()); }
+    if (wifiScanning) {
+      // Never wait for the radio under the state lock or pause the LED render loop.
+      int count;
+      const bool starting = wifiScanPending;
+      if (wifiScanPending) {
+        wifiScanPending = false;
+        WiFi.setScanTimeout(15000);
+        count = WiFi.scanNetworks(true);
+      } else count = WiFi.scanComplete();
+      if (count != WIFI_SCAN_RUNNING) {
+        if (count < 0) {
+          if (!starting) esp_wifi_scan_stop();
+          wifiScanError = "Wi-Fi scan failed. Retry when the device is not connecting.";
+        } else {
+          // Arduino's scan accessors use uint8_t indexes. Keep the strongest
+          // distinct names/security modes, omitting hidden (empty) SSIDs.
+          for (int i = 0; i < count && i < 256; i++) {
+            String ssid = WiFi.SSID(i);
+            if (!ssid.length()) continue;
+            const int32_t rssi = WiFi.RSSI(i);
+            const auto auth = WiFi.encryptionType(i);
+            const bool password = auth != WIFI_AUTH_OPEN && auth != WIFI_AUTH_OWE;
+            int duplicate = -1;
+            for (pb_size_t j = 0; j < wifiNetworkCount; j++) {
+              if (ssid == wifiNetworks[j].ssid && password == wifiNetworks[j].password_required) { duplicate = j; break; }
+            }
+            if (duplicate >= 0) {
+              if (wifiNetworks[duplicate].rssi >= rssi) continue;
+              for (pb_size_t j = duplicate; j + 1 < wifiNetworkCount; j++) wifiNetworks[j] = wifiNetworks[j + 1];
+              wifiNetworkCount--;
+            }
+            pb_size_t position = 0;
+            while (position < wifiNetworkCount && wifiNetworks[position].rssi >= rssi) position++;
+            if (position >= 32) continue;
+            if (wifiNetworkCount < 32) wifiNetworkCount++;
+            for (pb_size_t j = wifiNetworkCount - 1; j > position; j--) wifiNetworks[j] = wifiNetworks[j - 1];
+            strlcpy(wifiNetworks[position].ssid, ssid.c_str(), sizeof(wifiNetworks[position].ssid));
+            wifiNetworks[position].rssi = rssi;
+            wifiNetworks[position].password_required = password;
+          }
+        }
+        WiFi.scanDelete(); wifiScanning = false;
+      }
+    }
+    if (wifiPending && !wifiScanning) { wifiPending = false; WiFi.disconnect(); WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str()); }
     bool restart = rebootPending;
     xSemaphoreGive(stateMutex);
     if (restart) { delay(200); ESP.restart(); }

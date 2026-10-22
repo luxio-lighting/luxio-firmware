@@ -20,6 +20,7 @@ enum Operation {
   CHECK_UPDATE = 13;
   INSTALL_UPDATE = 14;
   SET_POWER = 15;
+  SCAN_WIFI = 16;
 }
 enum Mode {
   COLOR = 0;
@@ -42,6 +43,7 @@ message Config {
   uint32 channel = 5;
 }
 message Wifi { string ssid = 1; string password = 2; }
+message WifiNetwork { string ssid = 1; sint32 rssi = 2; bool password_required = 3; }
 message Script { string id = 1; string name = 2; string source = 3; Mode mode = 4; }
 message State {
   string device_id = 1;
@@ -78,4 +80,7 @@ message Response {
   bool update_checking = 9;
   string update_error = 10;
   uint32 next_script_offset = 11; // Zero means the last page.
+  repeated WifiNetwork wifi_networks = 12; // Strongest first; at most 32 distinct SSID/security pairs.
+  bool wifi_scanning = 13; // SCAN_WIFI starts; GET_STATE polls without restarting.
+  string wifi_scan_error = 14;
 }

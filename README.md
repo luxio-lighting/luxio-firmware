@@ -5,7 +5,7 @@ The ESP32-S3 build includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Firm
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=11 LUXIO_MATTER=1 tools/build-firmware.sh
+LUXIO_BUILD=12 LUXIO_MATTER=1 tools/build-firmware.sh
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -53,3 +53,11 @@ Saved animations and gradients are compressed on-device with no fixed item-count
 Power is `on: true|false`; brightness is an independent integer from 1 to 256. Changing brightness while off keeps the output off. Setting a color or starting an animation/gradient turns on at the stored brightness. Off preserves the active mode, and power changes fade. Matter levels are mapped from its 1–254 range. Old saved states migrate once: zero brightness becomes off at level 16; other levels retain their relative intensity.
 
 Run `DEVICE_ADDRESS=<ip> DEVICE_SERIAL=<port> node --import tsx tools/test-power-device.ts` for the opt-in physical regression, including reboot persistence. It removes its test script and restores the original output.
+
+## Wi-Fi discovery (build 12)
+
+Send `SCAN_WIFI` (operation 16) over USB or the HTTP/WebSocket Protobuf API. It returns immediately with `wifiScanning: true`; poll `GET_STATE` until that becomes false. `wifiNetworks` contains `{ ssid, rssi, passwordRequired }` entries, with RSSI in dBm (negative values; higher is stronger). `wifiScanError` reports a failed scan separately from command errors. Repeating `SCAN_WIFI` while scanning joins the current scan; sending it after completion starts a fresh scan.
+
+Results contain up to 32 distinct SSID/security pairs, strongest first. Duplicate access points use the strongest signal. Hidden SSIDs are omitted; Setup offers manual entry. Open and OWE networks do not require a password. Results are cached in RAM until the next scan. Scanning is asynchronous, keeps the current connection and LED rendering active, and delays a pending Wi-Fi connection change until the scan finishes.
+
+Run `DEVICE_ADDRESS=<ip> DEVICE_SERIAL=<port> node --import tsx tools/test-wifi-device.ts` to verify USB/HTTP scanning, polling, cached results, signal ordering and unchanged controls/library on a real board.

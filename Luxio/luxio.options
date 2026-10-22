@@ -2,6 +2,9 @@ luxio.Config.name max_size:64
 luxio.Config.strip_type max_size:8
 luxio.Wifi.ssid max_size:33
 luxio.Wifi.password max_size:65
+luxio.WifiNetwork.ssid max_size:33
+luxio.Response.wifi_networks max_count:32
+luxio.Response.wifi_scan_error max_size:160
 luxio.Script.id max_size:37
 luxio.Script.name max_size:64
 luxio.Script.source max_size:16385

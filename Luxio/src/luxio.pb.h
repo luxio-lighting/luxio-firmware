@@ -26,7 +26,8 @@ typedef enum _luxio_Operation {
     luxio_Operation_GET_PAIRING_CODE = 12,
     luxio_Operation_CHECK_UPDATE = 13,
     luxio_Operation_INSTALL_UPDATE = 14,
-    luxio_Operation_SET_POWER = 15
+    luxio_Operation_SET_POWER = 15,
+    luxio_Operation_SCAN_WIFI = 16
 } luxio_Operation;
 
 typedef enum _luxio_Mode {
@@ -57,6 +58,12 @@ typedef struct _luxio_Wifi {
     char ssid[33];
     char password[65];
 } luxio_Wifi;
+
+typedef struct _luxio_WifiNetwork {
+    char ssid[33];
+    int32_t rssi;
+    bool password_required;
+} luxio_WifiNetwork;
 
 typedef struct _luxio_Script {
     char id[37];
@@ -110,6 +117,10 @@ typedef struct _luxio_Response {
     bool update_checking;
     char update_error[160];
     uint32_t next_script_offset; /* Zero means the last page. */
+    pb_size_t wifi_networks_count;
+    luxio_WifiNetwork wifi_networks[32]; /* Strongest first; at most 32 distinct SSID/security pairs. */
+    bool wifi_scanning; /* SCAN_WIFI starts; GET_STATE polls without restarting. */
+    char wifi_scan_error[160];
 } luxio_Response;
 
 
@@ -119,12 +130,13 @@ extern "C" {
 
 /* Helper constants for enums */
 #define _luxio_Operation_MIN luxio_Operation_GET_STATE
-#define _luxio_Operation_MAX luxio_Operation_SET_POWER
-#define _luxio_Operation_ARRAYSIZE ((luxio_Operation)(luxio_Operation_SET_POWER+1))
+#define _luxio_Operation_MAX luxio_Operation_SCAN_WIFI
+#define _luxio_Operation_ARRAYSIZE ((luxio_Operation)(luxio_Operation_SCAN_WIFI+1))
 
 #define _luxio_Mode_MIN luxio_Mode_COLOR
 #define _luxio_Mode_MAX luxio_Mode_ANIMATION
 #define _luxio_Mode_ARRAYSIZE ((luxio_Mode)(luxio_Mode_ANIMATION+1))
+
 
 
 
@@ -141,17 +153,19 @@ extern "C" {
 #define luxio_Color_init_default                 {0, 0, 0, 0, 0, 0}
 #define luxio_Config_init_default                {"", "", 0, 0, 0}
 #define luxio_Wifi_init_default                  {"", ""}
+#define luxio_WifiNetwork_init_default           {"", 0, 0}
 #define luxio_Script_init_default                {"", "", "", _luxio_Mode_MIN}
 #define luxio_State_init_default                 {"", 0, false, luxio_Config_init_default, 0, false, luxio_Color_init_default, "", "", _luxio_Mode_MIN, 0}
 #define luxio_Request_init_default               {0, _luxio_Operation_MIN, false, luxio_Color_init_default, 0, false, luxio_Config_init_default, false, luxio_Wifi_init_default, false, luxio_Script_init_default, "", 0, 0}
-#define luxio_Response_init_default              {0, "", false, luxio_State_init_default, {{NULL}, NULL}, false, luxio_Script_init_default, "", "", 0, 0, "", 0}
+#define luxio_Response_init_default              {0, "", false, luxio_State_init_default, {{NULL}, NULL}, false, luxio_Script_init_default, "", "", 0, 0, "", 0, 0, {luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default}, 0, ""}
 #define luxio_Color_init_zero                    {0, 0, 0, 0, 0, 0}
 #define luxio_Config_init_zero                   {"", "", 0, 0, 0}
 #define luxio_Wifi_init_zero                     {"", ""}
+#define luxio_WifiNetwork_init_zero              {"", 0, 0}
 #define luxio_Script_init_zero                   {"", "", "", _luxio_Mode_MIN}
 #define luxio_State_init_zero                    {"", 0, false, luxio_Config_init_zero, 0, false, luxio_Color_init_zero, "", "", _luxio_Mode_MIN, 0}
 #define luxio_Request_init_zero                  {0, _luxio_Operation_MIN, false, luxio_Color_init_zero, 0, false, luxio_Config_init_zero, false, luxio_Wifi_init_zero, false, luxio_Script_init_zero, "", 0, 0}
-#define luxio_Response_init_zero                 {0, "", false, luxio_State_init_zero, {{NULL}, NULL}, false, luxio_Script_init_zero, "", "", 0, 0, "", 0}
+#define luxio_Response_init_zero                 {0, "", false, luxio_State_init_zero, {{NULL}, NULL}, false, luxio_Script_init_zero, "", "", 0, 0, "", 0, 0, {luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero}, 0, ""}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define luxio_Color_red_tag                      1
@@ -167,6 +181,9 @@ extern "C" {
 #define luxio_Config_channel_tag                 5
 #define luxio_Wifi_ssid_tag                      1
 #define luxio_Wifi_password_tag                  2
+#define luxio_WifiNetwork_ssid_tag               1
+#define luxio_WifiNetwork_rssi_tag               2
+#define luxio_WifiNetwork_password_required_tag  3
 #define luxio_Script_id_tag                      1
 #define luxio_Script_name_tag                    2
 #define luxio_Script_source_tag                  3
@@ -201,6 +218,9 @@ extern "C" {
 #define luxio_Response_update_checking_tag       9
 #define luxio_Response_update_error_tag          10
 #define luxio_Response_next_script_offset_tag    11
+#define luxio_Response_wifi_networks_tag         12
+#define luxio_Response_wifi_scanning_tag         13
+#define luxio_Response_wifi_scan_error_tag       14
 
 /* Struct field encoding specification for nanopb */
 #define luxio_Color_FIELDLIST(X, a) \
@@ -227,6 +247,13 @@ X(a, STATIC,   SINGULAR, STRING,   ssid,              1) \
 X(a, STATIC,   SINGULAR, STRING,   password,          2)
 #define luxio_Wifi_CALLBACK NULL
 #define luxio_Wifi_DEFAULT NULL
+
+#define luxio_WifiNetwork_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, STRING,   ssid,              1) \
+X(a, STATIC,   SINGULAR, SINT32,   rssi,              2) \
+X(a, STATIC,   SINGULAR, BOOL,     password_required,   3)
+#define luxio_WifiNetwork_CALLBACK NULL
+#define luxio_WifiNetwork_DEFAULT NULL
 
 #define luxio_Script_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   id,                1) \
@@ -280,16 +307,21 @@ X(a, STATIC,   SINGULAR, STRING,   pairing_qr,        7) \
 X(a, STATIC,   SINGULAR, UINT32,   available_build,   8) \
 X(a, STATIC,   SINGULAR, BOOL,     update_checking,   9) \
 X(a, STATIC,   SINGULAR, STRING,   update_error,     10) \
-X(a, STATIC,   SINGULAR, UINT32,   next_script_offset,  11)
+X(a, STATIC,   SINGULAR, UINT32,   next_script_offset,  11) \
+X(a, STATIC,   REPEATED, MESSAGE,  wifi_networks,    12) \
+X(a, STATIC,   SINGULAR, BOOL,     wifi_scanning,    13) \
+X(a, STATIC,   SINGULAR, STRING,   wifi_scan_error,  14)
 #define luxio_Response_CALLBACK pb_default_field_callback
 #define luxio_Response_DEFAULT NULL
 #define luxio_Response_state_MSGTYPE luxio_State
 #define luxio_Response_scripts_MSGTYPE luxio_Script
 #define luxio_Response_script_MSGTYPE luxio_Script
+#define luxio_Response_wifi_networks_MSGTYPE luxio_WifiNetwork
 
 extern const pb_msgdesc_t luxio_Color_msg;
 extern const pb_msgdesc_t luxio_Config_msg;
 extern const pb_msgdesc_t luxio_Wifi_msg;
+extern const pb_msgdesc_t luxio_WifiNetwork_msg;
 extern const pb_msgdesc_t luxio_Script_msg;
 extern const pb_msgdesc_t luxio_State_msg;
 extern const pb_msgdesc_t luxio_Request_msg;
@@ -299,6 +331,7 @@ extern const pb_msgdesc_t luxio_Response_msg;
 #define luxio_Color_fields &luxio_Color_msg
 #define luxio_Config_fields &luxio_Config_msg
 #define luxio_Wifi_fields &luxio_Wifi_msg
+#define luxio_WifiNetwork_fields &luxio_WifiNetwork_msg
 #define luxio_Script_fields &luxio_Script_msg
 #define luxio_State_fields &luxio_State_msg
 #define luxio_Request_fields &luxio_Request_msg
@@ -312,6 +345,7 @@ extern const pb_msgdesc_t luxio_Response_msg;
 #define luxio_Request_size                       16791
 #define luxio_Script_size                        16493
 #define luxio_State_size                         299
+#define luxio_WifiNetwork_size                   42
 #define luxio_Wifi_size                          100
 
 #ifdef __cplusplus

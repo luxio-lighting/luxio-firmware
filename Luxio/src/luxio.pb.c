@@ -15,6 +15,9 @@ PB_BIND(luxio_Config, luxio_Config, AUTO)
 PB_BIND(luxio_Wifi, luxio_Wifi, AUTO)
 
 
+PB_BIND(luxio_WifiNetwork, luxio_WifiNetwork, AUTO)
+
+
 PB_BIND(luxio_Script, luxio_Script, 4)
 
 

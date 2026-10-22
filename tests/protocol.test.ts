@@ -71,3 +71,16 @@ test('all bundled presets run for multiple frames with valid independent channel
     animation.close();
   }
 });
+
+test('Wi-Fi scan protocol preserves negative RSSI, security and asynchronous status', () => {
+  assert.equal(decodeRequest(encodeRequest({ id: 81, operation: 16 })).operation, 16);
+  const networks = [
+    { ssid: 'Home & <guest>', rssi: -39, passwordRequired: true },
+    { ssid: 'Café', rssi: -82, passwordRequired: false },
+  ];
+  const response = decodeResponse(encodeResponse({ id: 81, wifiNetworks: networks, wifiScanning: false }));
+  assert.deepEqual(response.wifiNetworks, networks);
+  assert.equal(response.wifiScanning, false);
+  assert.equal(decodeResponse(encodeResponse({ id: 82, wifiScanning: true })).wifiScanning, true);
+  assert.equal(decodeResponse(encodeResponse({ id: 83, wifiScanError: 'Scan failed' })).wifiScanError, 'Scan failed');
+});
