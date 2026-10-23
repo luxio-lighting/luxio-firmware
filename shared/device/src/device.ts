@@ -13,12 +13,12 @@ export class Device {
   animation?: Animation;
   private animationRevision = 0;
   constructor(deviceId: string, saved?: { state: State; scripts: Script[]; gradients?: Gradient[]; colors?: SavedColor[] }) {
-    this.state = saved?.state ?? { deviceId, build: 21, config: { name: 'Luxio development light', stripType: 'WS2805', ledCount: 60, gpio: 4, channel: 100 }, brightness: 180, on: true, color: colorSchema.parse({}), activeScriptId: '', lanIp: '127.0.0.1' };
+    this.state = saved?.state ?? { deviceId, build: 22, config: { name: 'Luxio development light', stripType: 'WS2805', ledCount: 60, gpio: 4, channel: 100 }, brightness: 180, on: true, color: colorSchema.parse({}), activeScriptId: '', lanIp: '127.0.0.1' };
     if (this.state.on === undefined) {
       this.state.on = this.state.brightness > 0;
       this.state.brightness = this.state.brightness ? Math.round(this.state.brightness * 256 / 255) : 16;
     }
-    this.state.build = 21;
+    this.state.build = 22;
     this.state.deviceId = deviceId;
     this.state.parameters = []; this.state.animationPreview = [];
     this.state.scriptName = ''; this.state.activeScriptId = '';

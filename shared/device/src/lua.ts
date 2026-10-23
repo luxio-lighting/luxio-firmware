@@ -22,6 +22,8 @@ export class Animation {
     }
     lua.lua_pushcfunction(L, () => { lua.lua_pushinteger(L, count); return 1; });
     lua.lua_setglobal(L, to_luastring('luxio_get_pixel_count'));
+    lua.lua_pushcfunction(L, () => { lua.lua_pushstring(L, to_luastring(stripType === 'WS2805' ? 'RGBCCT' : stripType === 'WS2814' ? 'RGBW' : 'RGB')); return 1; });
+    lua.lua_setglobal(L, to_luastring('luxio_get_color_type'));
     lua.lua_pushcfunction(L, () => { lua.lua_pushinteger(L, this.elapsed); return 1; });
     lua.lua_setglobal(L, to_luastring('luxio_millis'));
     lua.lua_pushcfunction(L, () => {

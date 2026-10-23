@@ -5,7 +5,7 @@ The ESP32-S3 build includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Firm
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=19 LUXIO_MATTER=1 tools/build-firmware.sh
+LUXIO_BUILD=22 LUXIO_MATTER=1 tools/build-firmware.sh
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -79,3 +79,7 @@ PSRAM-equipped boards, released with the VM, and never persisted by this feature
 Animation control declarations support `Slider`, `Number` (numeric input), and `Checkbox` in build 21. `Boolean` remains a legacy alias. The protocol carries the numeric control style in parameter field 7.
 
 Preset catalogs belong to the mobile apps and Studio. Firmware accepts client-supplied Lua and parameter declarations; it does not bundle or select built-in animations. Files under `tools/fixtures/` are storage-test inputs only.
+
+## Lua color capabilities (build 22)
+
+`luxio_get_color_type()` returns `"RGB"`, `"RGBW"`, or `"RGBCCT"` from the configured strip type (WS2812, WS2814, or WS2805 respectively). It is available at the top level, in `setup()`, and in `loop()`. It reports configured channels; it does not detect the attached hardware. Older firmware can use `luxio_get_color_type and luxio_get_color_type() or "RGB"` to fall back to RGB output.

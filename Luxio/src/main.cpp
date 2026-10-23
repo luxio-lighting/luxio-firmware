@@ -163,6 +163,10 @@ static String startAnimation(const luxio_Script &script) {
   luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1); lua_pop(L, 1);
   for (const char *name : {"dofile", "loadfile", "load", "collectgarbage", "print"}) { lua_pushnil(L); lua_setglobal(L, name); }
   lua_pushcfunction(L, [](lua_State *L) -> int { lua_pushinteger(L, state.config.led_count); return 1; }); lua_setglobal(L, "luxio_get_pixel_count");
+  lua_pushcfunction(L, [](lua_State *L) -> int {
+    lua_pushstring(L, !strcmp(state.config.strip_type, "WS2805") ? "RGBCCT" : !strcmp(state.config.strip_type, "WS2814") ? "RGBW" : "RGB");
+    return 1;
+  }); lua_setglobal(L, "luxio_get_color_type");
   lua_pushcfunction(L, [](lua_State *L) -> int { lua_pushinteger(L, millis() - animationStarted); return 1; }); lua_setglobal(L, "luxio_millis");
   lua_pushcfunction(L, [](lua_State *L) -> int {
     int index = luaL_checkinteger(L, 1);
