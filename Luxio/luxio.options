@@ -17,3 +17,26 @@ luxio.Response.pairing_code max_size:32
 luxio.Response.pairing_qr max_size:128
 luxio.Response.scripts type:FT_CALLBACK
 luxio.Response.update_error max_size:160
+luxio.Gradient.id max_size:37
+luxio.Gradient.name max_size:64
+luxio.Gradient.colors max_count:8
+luxio.Gradient.editor_metadata max_size:2049
+luxio.State.active_gradient_id max_size:37
+luxio.Request.gradient_id max_size:37
+luxio.Response.gradients type:FT_CALLBACK
+luxio.SavedColor.id max_size:37
+luxio.SavedColor.name max_size:64
+luxio.State.active_color_id max_size:37
+luxio.State.script_name max_size:64
+luxio.Request.color_id max_size:37
+luxio.Response.colors type:FT_CALLBACK
+
+luxio.AnimationParameter.name max_size:33
+luxio.Script.parameters max_count:16
+luxio.State.parameters max_count:16
+luxio.Request.parameters max_count:16
+
+luxio.NetworkStatus.bssid max_size:18
+luxio.Response.animation_error max_size:160
+luxio.Script.preview max_count:8
+luxio.State.animation_preview max_count:8

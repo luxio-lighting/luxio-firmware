@@ -5,7 +5,7 @@ The ESP32-S3 build includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Firm
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=12 LUXIO_MATTER=1 tools/build-firmware.sh
+LUXIO_BUILD=19 LUXIO_MATTER=1 tools/build-firmware.sh
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -18,10 +18,10 @@ The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it
 | OTA boot selection | `0xe000` | 8 KiB |
 | Factory recovery loader | `0x10000` | 1.125 MiB |
 | Matter application | `0x130000` | 2.5 MiB |
-| Script filesystem | `0x3b0000` | 256 KiB |
+| Library filesystem | `0x3b0000` | 256 KiB |
 | Core dumps | `0x3f0000` | 64 KiB |
 
-Initial installation requires USB flashing of the bootloader, partition table, erased OTA selection, recovery image and main image at the manifest offsets. Back up flash first. Do not erase all flash: NVS contains Wi-Fi credentials, identity and Matter state, and the filesystem contains scripts. Normal network updates write only the main application; the loader is never replaced over the network.
+Initial installation requires USB flashing of the bootloader, partition table, erased OTA selection, recovery image and main image at the manifest offsets. Back up flash first. Do not erase all flash: NVS contains Wi-Fi credentials, identity and Matter state, and the filesystem contains saved colors, gradients, and animations. Normal network updates write only the main application; the loader is never replaced over the network.
 
 The recovery web page is at the device's LAN IP while updating, with `/status`, `POST /retry` and `POST /update`. A replacement update requires `url` (HTTPS), `sha256`, `size`, `build`, and `target: "esp32s3-recovery-v1"`. It validates the target, image size, chip, Luxio app descriptor/build, SHA-256 and ESP image checksum before boot selection. Failed transfers stay in recovery for manual retry. The bootloader's pending-image rollback returns to recovery if the new application resets before confirming startup; there is no previous full application to restore.
 
@@ -42,17 +42,17 @@ Hardware tests live in `tools/` and are opt-in. For recovery testing, use `TARGE
 
 ## Development simulator and project records
 
-`npm test` also covers Protobuf framing, device modes and Lua presets. `npm run device` starts the local HTTP/WebSocket device simulator; it does not emulate Matter or physical hardware. `npm run sync:protocol` regenerates the local TypeScript schema from `Luxio/luxio.proto`.
+`npm test` also covers Protobuf framing, device modes and Lua execution. `npm run device` starts the local HTTP/WebSocket device simulator; it does not emulate Matter or physical hardware. `npm run sync:protocol` regenerates the local TypeScript schema from `Luxio/luxio.proto`.
 
 Project design notes and historical test records are retained in [docs/project](docs/project/repositories.md).
 
-Saved animations and gradients are compressed on-device with no fixed item-count cap. See [script storage](docs/script-storage.md) for compatibility, pagination, capacity measurements and tests.
+Build 13 stores colors, native gradients, and compressed Lua animations in separate directories within the existing 256 KiB filesystem. Client-supplied live content stays in RAM. There is no fixed item-count cap. See [native resources](docs/native-resources.md) for the API and [animation storage](docs/script-storage.md) for compatibility, pagination, capacity measurements and tests.
 
 ## Power and brightness (build 11)
 
 Power is `on: true|false`; brightness is an independent integer from 1 to 256. Changing brightness while off keeps the output off. Setting a color or starting an animation/gradient turns on at the stored brightness. Off preserves the active mode, and power changes fade. Matter levels are mapped from its 1–254 range. Old saved states migrate once: zero brightness becomes off at level 16; other levels retain their relative intensity.
 
-Run `DEVICE_ADDRESS=<ip> DEVICE_SERIAL=<port> node --import tsx tools/test-power-device.ts` for the opt-in physical regression, including reboot persistence. It removes its test script and restores the original output.
+Run `DEVICE_ADDRESS=<ip> DEVICE_SERIAL=<port> node --import tsx tools/test-power-device.ts` for the opt-in physical regression, including reboot persistence. It removes its test animation and restores the original output.
 
 ## Wi-Fi discovery (build 12)
 
@@ -61,3 +61,21 @@ Send `SCAN_WIFI` (operation 16) over USB or the HTTP/WebSocket Protobuf API. It 
 Results contain up to 32 distinct SSID/security pairs, strongest first. Duplicate access points use the strongest signal. Hidden SSIDs are omitted; Setup offers manual entry. Open and OWE networks do not require a password. Results are cached in RAM until the next scan. Scanning is asynchronous, keeps the current connection and LED rendering active, and delays a pending Wi-Fi connection change until the scan finishes.
 
 Run `DEVICE_ADDRESS=<ip> DEVICE_SERIAL=<port> node --import tsx tools/test-wifi-device.ts` to verify USB/HTTP scanning, polling, cached results, signal ordering and unchanged controls/library on a real board.
+
+## Active animation snapshots (build 20)
+
+GET_SCRIPT (6) with an empty `script_id` returns the currently running source,
+name/ID, preview and current parameter values. This includes unsaved SET_SCRIPT
+animations; a saved script subsequently edited on disk does not change the running
+snapshot. With an ID, GET_SCRIPT still reads that saved file. No active animation
+returns `No animation is running`. Power-off preserves the active animation.
+
+State `animation_revision` (field 16) changes on each successful start and clears
+when the animation stops. Parameter and brightness changes retain it. Clients can
+fetch a snapshot when the revision changes and run a local preview without
+polling or streaming source/pixels per frame. Source is retained in PSRAM on
+PSRAM-equipped boards, released with the VM, and never persisted by this feature.
+
+Animation control declarations support `Slider`, `Number` (numeric input), and `Checkbox` in build 21. `Boolean` remains a legacy alias. The protocol carries the numeric control style in parameter field 7.
+
+Preset catalogs belong to the mobile apps and Studio. Firmware accepts client-supplied Lua and parameter declarations; it does not bundle or select built-in animations. Files under `tools/fixtures/` are storage-test inputs only.

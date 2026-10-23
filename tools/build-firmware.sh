@@ -18,7 +18,7 @@ chmod +x .sdk/ctags/ctags
   --build-property "runtime.tools.ctags.path=$PWD/.sdk/ctags" \
   --build-property "tools.ctags.path=$PWD/.sdk/ctags" \
   --build-property "compiler.c.extra_flags=-DLUA_USE_C89 -I$PWD/Luxio/src/vendor/nanopb" \
-  --build-property "compiler.cpp.extra_flags=-DLUA_USE_C89 -I$PWD/Luxio/src/vendor/nanopb -DLUXIO_BUILD=${LUXIO_BUILD:-12} -DLUXIO_MATTER=${LUXIO_MATTER:-1} -DLUXIO_CLOUD_URL=\"${LUXIO_CLOUD_URL:-https://api.luxio.lighting}\"" \
+  --build-property "compiler.cpp.extra_flags=-DLUA_USE_C89 -I$PWD/Luxio/src/vendor/nanopb -DLUXIO_BUILD=${LUXIO_BUILD:-21} -DLUXIO_MATTER=${LUXIO_MATTER:-1} -DLUXIO_CLOUD_URL=\"${LUXIO_CLOUD_URL:-https://api.luxio.lighting}\"" \
   Luxio
 # Guard the actual custom application slot, even when a board profile has another limit.
 size=$(wc -c < build/main/Luxio.ino.bin | tr -d ' ')
@@ -39,4 +39,5 @@ test "$size" -le 1179648 || { echo "Recovery ($size bytes) exceeds its fixed 1.1
 # Arduino's merged images put the sketch at 0x10000; this layout needs TWO apps.
 # Remove those misleading outputs. Use the explicit flash parts from package-firmware.py.
 rm -f build/main/Luxio.ino.merged.bin build/recovery/Recovery.ino.merged.bin
+python3 tools/check-task-stacks.py
 python3 tools/package-firmware.py

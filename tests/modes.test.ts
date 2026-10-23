@@ -6,10 +6,10 @@ import { encodeResponse, decodeResponse, colorSchema } from '../shared/protocol/
 test('firmware modes separate held gradients from animated Lua and preserve brightness arbitration', () => {
   const device = new Device('test');
   const source = 'function setup() luxio_set_pixel_color(0,255,0,0) end function loop() luxio_set_pixel_color(0,0,0,255) end';
-  const gradient = device.handle({ id: 1, operation: 7, script: { id: '', name: 'Still', source, mode: 1 } }).script!;
+  const gradient = device.handle({ id: 1, operation: 20, gradient: { id: '', name: 'Still', colors: [colorSchema.parse({ red: 255 }), colorSchema.parse({ blue: 255 })] } }).gradient!;
   const moving = device.handle({ id: 2, operation: 7, script: { id: '', name: 'Moving', source, mode: 2 } }).script!;
   device.handle({ id: 3, operation: 2, brightness: 256 });
-  device.handle({ id: 4, operation: 10, scriptId: gradient.id });
+  device.handle({ id: 4, operation: 23, gradientId: gradient.id });
   assert.equal(device.state.mode, 1);
   assert.equal(decodeResponse(encodeResponse({ state: device.state })).state!.mode, 1);
   for (let frame = 0; frame < 10; frame++) assert.equal(device.output()[0].red, 255, 'Gradient must never execute loop');
@@ -23,11 +23,11 @@ test('firmware modes separate held gradients from animated Lua and preserve brig
   assert.equal(device.state.mode, 2);
   device.handle({ id: 8, operation: 1, color: colorSchema.parse({ warmWhite: 255 }) });
   assert.equal(device.state.mode, 0); assert.equal(device.state.activeScriptId, '');
-  device.handle({ id: 9, operation: 10, scriptId: gradient.id });
-  device.handle({ id: 10, operation: 11 });
+  device.handle({ id: 9, operation: 23, gradientId: gradient.id });
+  device.handle({ id: 10, operation: 24 });
   assert.equal(device.state.mode, 0);
-  device.handle({ id: 11, operation: 10, scriptId: gradient.id });
-  device.handle({ id: 12, operation: 9, scriptId: gradient.id });
+  device.handle({ id: 11, operation: 23, gradientId: gradient.id });
+  device.handle({ id: 12, operation: 22, gradientId: gradient.id });
   assert.equal(device.state.mode, 0);
 });
 
@@ -39,20 +39,18 @@ test('legacy scripts remain animations; invalid modes fail; mode metadata surviv
   device.handle({ id: 2, operation: 10, scriptId: legacy.id });
   assert.equal(device.state.mode, 2);
   assert.ok(device.handle({ id: 3, operation: 7, script: { id: '', name: 'Bad mode', source, mode: 9 } }).error);
-  const gradient = device.handle({ id: 4, operation: 8, script: { ...legacy, name: 'Renamed', mode: 1 } }).script!;
-  assert.equal(gradient.id, legacy.id);
-  assert.equal(device.handle({ id: 5, operation: 5 }).scripts![0].mode, 1);
-  device.handle({ id: 6, operation: 10, scriptId: legacy.id });
-  assert.equal(device.state.mode, 1);
+  assert.ok(device.handle({ id: 4, operation: 8, script: { ...legacy, mode: 1 } }).error);
+  const renamed = device.handle({ id: 5, operation: 8, script: { ...legacy, name: 'Renamed', mode: 2 } }).script!;
+  assert.equal(renamed.id, legacy.id);
+  assert.equal(device.handle({ id: 6, operation: 5 }).scripts![0].mode, 2);
   const restored = new Device('test', { state: structuredClone(device.state), scripts: device.scripts });
-  assert.equal(restored.state.mode, 0);
-  assert.equal(restored.scripts[0].mode, 1);
+  assert.equal(restored.state.mode, 0); assert.equal(restored.scripts[0].mode, 2);
 });
 
 test('large animation and gradient libraries are paged without the old 32-item cap', () => {
   const device = new Device('large-library');
   for (let i = 0; i < 1000; i++) {
-    const created = device.handle({ id: i + 1, operation: 7, script: { id: '', name: `Saved ${i} `.padEnd(63, 'x'), source: 'function setup() end function loop() end', mode: i % 2 ? 1 : 2 } });
+    const created = device.handle({ id: i + 1, operation: 7, script: { id: '', name: `Saved ${i} `.padEnd(63, 'x'), source: 'function setup() end function loop() end', mode: 2 } });
     assert.ok(created.script, created.error);
   }
   const ids: string[] = [];
@@ -86,14 +84,14 @@ test('power is independent of brightness, and successful color/gradient/animatio
     assert.equal(device.output()[0].red, Math.round(255 * level / 256));
     for (const mode of [1, 2]) {
       device.handle({ id: 5, operation: 15, on: false });
-      const script = device.handle({ id: 6, operation: 7, script: { id: '', name: 'Power test', source, mode } }).script!;
+      const script = mode === 2 ? device.handle({ id: 6, operation: 7, script: { id: '', name: 'Power test', source, mode } }).script! : device.handle({ id: 6, operation: 20, gradient: { id: '', name: 'Power test', colors: [colorSchema.parse({ red: 255 }), colorSchema.parse({ blue: 255 })] } }).gradient!;
       assert.equal(device.state.on, false, 'Saving does not turn on');
-      device.handle({ id: 7, operation: 10, scriptId: script.id });
+      device.handle({ id: 7, operation: mode === 2 ? 10 : 23, scriptId: script.id, gradientId: script.id });
       assert.equal(device.state.on, true); assert.equal(device.state.brightness, level);
       device.handle({ id: 8, operation: 15, on: false });
-      assert.equal(device.state.activeScriptId, script.id); assert.equal(device.state.mode, mode);
+      assert.equal(mode === 2 ? device.state.activeScriptId : device.state.activeGradientId, script.id); assert.equal(device.state.mode, mode);
       device.handle({ id: 9, operation: 15, on: true });
-      assert.equal(device.state.brightness, level); assert.equal(device.state.activeScriptId, script.id);
+      assert.equal(device.state.brightness, level); assert.equal(mode === 2 ? device.state.activeScriptId : device.state.activeGradientId, script.id);
     }
   }
   device.handle({ id: 10, operation: 15, on: false });

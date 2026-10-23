@@ -44,7 +44,12 @@ const server = createServer(async (request, response) => {
     const message = decodeRequest(Buffer.concat(chunks));
     queue = queue.then(async () => {
       const result = device.handle(message);
-      await writeFile(`${directory}/state.json.tmp`, JSON.stringify({ state: device.state, scripts: device.scripts }), { mode: 0o600 });
+      const persistent = structuredClone(device.state);
+        if (!persistent.activeColorId) persistent.color = { red: 0, green: 0, blue: 0, white: 0, warmWhite: 0, coolWhite: 0 };
+        if (!persistent.activeGradientId) persistent.gradient = undefined;
+        if (!persistent.activeScriptId) persistent.scriptName = '';
+        if (!persistent.activeGradientId && !persistent.activeScriptId) persistent.mode = 0;
+        await writeFile(`${directory}/state.json.tmp`, JSON.stringify({ state: persistent, scripts: device.scripts, gradients: device.gradients, colors: device.colors }), { mode: 0o600 });
       await rename(`${directory}/state.json.tmp`, `${directory}/state.json`);
       response.writeHead(200, { 'Content-Type': 'application/x-protobuf' }).end(encodeResponse(result));
       for (const socket of sockets.clients) if (socket.readyState === WebSocket.OPEN) socket.send(encodeResponse({ id: 0, state: device.state }));
@@ -59,7 +64,12 @@ sockets.on('connection', socket => {
     queue = queue.then(async () => {
       try {
         const result = device.handle(decodeRequest(new Uint8Array(bytes as Buffer)));
-        await writeFile(`${directory}/state.json.tmp`, JSON.stringify({ state: device.state, scripts: device.scripts }), { mode: 0o600 });
+        const persistent = structuredClone(device.state);
+        if (!persistent.activeColorId) persistent.color = { red: 0, green: 0, blue: 0, white: 0, warmWhite: 0, coolWhite: 0 };
+        if (!persistent.activeGradientId) persistent.gradient = undefined;
+        if (!persistent.activeScriptId) persistent.scriptName = '';
+        if (!persistent.activeGradientId && !persistent.activeScriptId) persistent.mode = 0;
+        await writeFile(`${directory}/state.json.tmp`, JSON.stringify({ state: persistent, scripts: device.scripts, gradients: device.gradients, colors: device.colors }), { mode: 0o600 });
         await rename(`${directory}/state.json.tmp`, `${directory}/state.json`);
         socket.send(encodeResponse(result));
         for (const peer of sockets.clients) if (peer.readyState === WebSocket.OPEN) peer.send(encodeResponse({ id: 0, state: device.state }));

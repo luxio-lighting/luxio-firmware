@@ -28,6 +28,15 @@ size_t encodeStoredScript(const luxio_Script &script, uint8_t *output, size_t ca
   if (!pb_encode_tag(&metadata, PB_WT_STRING, 1) || !pb_encode_string(&metadata, reinterpret_cast<const uint8_t *>(script.id), 36) ||
       !pb_encode_tag(&metadata, PB_WT_STRING, 2) || !pb_encode_string(&metadata, reinterpret_cast<const uint8_t *>(script.name), nameSize) ||
       !pb_encode_tag(&metadata, PB_WT_VARINT, 4) || !pb_encode_varint(&metadata, script.mode)) return 0;
+  if (script.parameters_count > 16) return 0;
+  for (size_t i = 0; i < script.parameters_count; ++i) {
+    if (!pb_encode_tag(&metadata, PB_WT_STRING, 5) || !pb_encode_submessage(&metadata, luxio_AnimationParameter_fields, &script.parameters[i])) return 0;
+  }
+  if (script.preview_count > 8) return 0;
+  for (size_t i = 0; i < script.preview_count; ++i) {
+    if (!pb_encode_tag(&metadata, PB_WT_STRING, 6) || !pb_encode_submessage(&metadata, luxio_Color_fields, &script.preview[i])) return 0;
+  }
+  if (metadata.bytes_written > 2048) return 0;
   uint8_t *payload = output + 24 + metadata.bytes_written;
   std::unique_ptr<heatshrink_encoder, decltype(&heatshrink_encoder_free)> encoder(heatshrink_encoder_alloc(10, 5), heatshrink_encoder_free);
   size_t consumed = 0, written = 0;
@@ -68,7 +77,7 @@ bool decodeStoredScript(const uint8_t *bytes, size_t size, luxio_Script &script,
   uint32_t fields[5] = {};
   for (size_t i = 0; i < 5; ++i) for (int byte = 0; byte < 4; ++byte) fields[i] |= uint32_t(bytes[4 + i * 4 + byte]) << (byte * 8);
   const auto codec = fields[0], metaSize = fields[1], sourceSize = fields[2], payloadSize = fields[3];
-  if (codec > 1 || !metaSize || metaSize > 128 || !sourceSize || sourceSize >= sizeof(script.source) ||
+  if (codec > 1 || !metaSize || metaSize > 2048 || !sourceSize || sourceSize >= sizeof(script.source) ||
       !payloadSize || payloadSize > sizeof(script.source) || size != 24 + metaSize + payloadSize || fields[4] != recordChecksum(bytes, size)) return false;
   auto metadata = pb_istream_from_buffer(bytes + 24, metaSize);
   if (!pb_decode(&metadata, luxio_Script_fields, &script) || strlen(script.id) != 36 || !script.name[0] || script.source[0] || script.mode > luxio_Mode_ANIMATION) return false;

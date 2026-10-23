@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { WebSocket } from 'ws';
 import { requestHttp, colorSchema, decodeResponse } from '../shared/protocol/src/index.js';
-import { presets } from '../shared/web/presets.js';
+const source = 'function loop() luxio_set_pixel_color(0, 23, 51, 82) end';
 const address = process.env.DEVICE_ADDRESS;
 if (!address) throw new Error('Set DEVICE_ADDRESS to the physical device to test');
 let id = 1;
@@ -22,12 +22,12 @@ try {
   }
   await assert.rejects(requestHttp(address, { id: id++, operation: 1, color: colorSchema.parse({ white: 255 }) }), /unavailable/);
   await assert.rejects(requestHttp(address, { id: id++, operation: 3, config: { ...initial.config, gpio: 26 } }), /reserved/);
-  const created = await requestHttp(address, { id: id++, operation: 7, script: { id: '', name: 'Integration test', source: presets[0].source } });
+  const created = await requestHttp(address, { id: id++, operation: 7, script: { id: '', name: 'Integration test', source: source } });
   assert.ok(created.script?.id); scriptId = created.script.id;
   const renamed = await requestHttp(address, { id: id++, operation: 8, script: { ...created.script, name: 'Renamed integration test' } });
   assert.equal(renamed.script!.id, scriptId);
   const read = await requestHttp(address, { id: id++, operation: 6, scriptId });
-  assert.equal(read.script!.source, presets[0].source);
+  assert.equal(read.script!.source, source);
   const listed = await requestHttp(address, { id: id++, operation: 5 });
   assert.ok(listed.scripts.some(script => script.id === scriptId && script.name === 'Renamed integration test' && !script.source));
   await requestHttp(address, { id: id++, operation: 10, scriptId });

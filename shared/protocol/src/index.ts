@@ -1,6 +1,8 @@
 import protobuf from 'protobufjs';
 import { z } from 'zod';
 import { schema } from './schema.js';
+import type { AnimationParameter } from './parameters.js';
+export type { AnimationParameter } from './parameters.js';
 
 export const MAX_FRAME = 32768;
 export const root = protobuf.parse(schema).root;
@@ -17,14 +19,20 @@ export const configSchema = z.object({
   ledCount: z.number().int().min(1).max(1024), gpio: z.number().int().min(0).max(54),
   channel: z.number().int().min(0).max(100),
 });
-export const scriptSchema = z.object({ id: z.uuid(), name: z.string().trim().min(1).max(63), source: z.string().min(1).max(16384), mode: z.number().int().min(0).max(2).optional().transform(value => value === 1 ? 1 : 2) });
+export const parameterSchema = z.object({ name: z.string().min(1).max(32), boolean: z.boolean().default(false), numberInput: z.boolean().optional(), value: z.number().finite(), defaultValue: z.number().default(0), minimum: z.number().default(0), maximum: z.number().default(0) });
+export const scriptSchema = z.object({ preview: z.array(colorSchema).max(8).default([]), id: z.uuid(), name: z.string().trim().min(1).max(63), source: z.string().min(1).max(16384), mode: z.union([z.literal(0), z.literal(2)]).optional().transform(() => 2), parameters: z.array(parameterSchema).max(16).default([]) });
+export const gradientSchema = z.object({ id: z.uuid(), name: z.string().trim().min(1).max(63), colors: z.array(colorSchema).min(2).max(8), editorMetadata: z.string().max(2048).default('') });
+export const savedColorSchema = z.object({ id: z.uuid(), name: z.string().trim().min(1).max(63), color: colorSchema });
+export interface SavedColor { id: string; name: string; color: Color }
+export interface Gradient { id: string; name: string; colors: Color[]; editorMetadata?: string }
 export type Color = z.infer<typeof colorSchema>;
 export type Config = z.infer<typeof configSchema>;
-export type Script = { id: string; name: string; source: string; mode?: number };
+export type Script = { preview?: Color[]; id: string; name: string; source: string; mode?: number; parameters?: AnimationParameter[] };
 export interface WifiNetwork { ssid: string; rssi: number; passwordRequired: boolean }
-export interface State { deviceId: string; build: number; config: Config; brightness: number; on: boolean; color: Color; activeScriptId: string; lanIp: string; mode?: number }
-export interface Request { id: number; operation: number; color?: Color; brightness?: number; on?: boolean; config?: Config; wifi?: { ssid: string; password: string }; script?: Script; scriptId?: string; scriptOffset?: number }
-export interface Response { id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string; nextScriptOffset?: number; wifiNetworks?: WifiNetwork[]; wifiScanning?: boolean; wifiScanError?: string }
+export interface State { animationRevision?: number; animationPreview?: Color[]; deviceId: string; build: number; config: Config; brightness: number; on: boolean; color: Color; activeScriptId: string; lanIp: string; mode?: number; activeGradientId?: string; gradient?: Gradient; activeColorId?: string; scriptName?: string; parameters?: AnimationParameter[] }
+export interface Request { id: number; operation: number; color?: Color; brightness?: number; on?: boolean; config?: Config; wifi?: { ssid: string; password: string }; script?: Script; scriptId?: string; scriptOffset?: number; gradient?: Gradient; gradientId?: string; gradientOffset?: number; savedColor?: SavedColor; colorId?: string; colorOffset?: number; parameters?: AnimationParameter[] }
+export interface NetworkStatus { connected: boolean; rssi: number; bssid: string; channel: number; powerSave: number; uptimeMs: number; internalFree: number; internalLargestBlock: number; disconnectCount: number; lastDisconnectReason: number }
+export interface Response { animationError?: string; networkStatus?: NetworkStatus; id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string; nextScriptOffset?: number; wifiNetworks?: WifiNetwork[]; wifiScanning?: boolean; wifiScanError?: string; gradients?: Gradient[]; gradient?: Gradient; nextGradientOffset?: number; colors?: SavedColor[]; savedColor?: SavedColor; nextColorOffset?: number }
 
 export function encodeRequest(request: Request): Uint8Array {
   const error = RequestMessage.verify(request);
@@ -82,21 +90,36 @@ export async function requestHttp(address: string, request: Request): Promise<Re
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid device address');
   url.pathname = '/api'; url.search = ''; url.hash = '';
   const scripts: Script[] = [];
-  let offset = request.scriptOffset ?? 0;
+  const gradients: Gradient[] = [];
+  const colors: SavedColor[] = [];
+  let offset = (request.operation === 25 ? request.colorOffset : request.operation === 18 ? request.gradientOffset : request.scriptOffset) ?? 0;
   while (true) {
     const response = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/x-protobuf' },
-      body: encodeRequest({ ...request, scriptOffset: offset }) as BodyInit, signal: AbortSignal.timeout(10000),
+      body: encodeRequest({ ...request, ...(request.operation === 25 ? { colorOffset: offset } : request.operation === 18 ? { gradientOffset: offset } : { scriptOffset: offset }) }) as BodyInit, signal: AbortSignal.timeout(10000),
       ...({ targetAddressSpace: 'local' } as object),
     });
     if (!response.ok) throw new Error(`Device returned HTTP ${response.status}`);
     const result = decodeResponse(new Uint8Array(await response.arrayBuffer()));
     if (result.id !== request.id) throw new Error('Device returned a mismatched request ID');
     if (result.error) throw new Error(result.error);
+    if (request.operation === 25) {
+      colors.push(...(result.colors ?? []));
+      if (!result.nextColorOffset) return { ...result, colors, nextColorOffset: 0 };
+      if (result.nextColorOffset <= offset || !result.colors?.length) throw new Error('Invalid color listing continuation');
+      offset = result.nextColorOffset; continue;
+    }
+    if (request.operation === 18) {
+      gradients.push(...(result.gradients ?? []));
+      if (!result.nextGradientOffset) return { ...result, gradients, nextGradientOffset: 0 };
+      if (result.nextGradientOffset <= offset || !result.gradients?.length) throw new Error('Invalid gradient listing continuation');
+      offset = result.nextGradientOffset;
+      continue;
+    }
     if (request.operation !== 5) return result;
     scripts.push(...result.scripts);
     if (!result.nextScriptOffset) return { ...result, scripts, nextScriptOffset: 0 };
-    if (result.nextScriptOffset <= offset || !result.scripts.length) throw new Error('Invalid script listing continuation');
+    if (result.nextScriptOffset <= offset || !result.scripts.length) throw new Error('Invalid animation listing continuation');
     offset = result.nextScriptOffset;
   }
 }

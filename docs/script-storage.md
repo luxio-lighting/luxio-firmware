@@ -1,6 +1,8 @@
-# Saved animations and gradients
+# Compressed animation storage
 
-Build 10 removes the 32-script cap. Both kinds of saved item use the same 256 KiB LittleFS partition; capacity depends on their source size and compressibility. Source remains limited to 16 KiB per item. There is no partition change.
+Build 13 separates colors and gradients from Lua. See [native resources](native-resources.md). The measurements below describe the earlier mixed script library; they are historical, not native gradient capacity estimates.
+
+Build 10 removes the 32-script cap. Saved animations use the 256 KiB LittleFS partition; capacity depends on their source size and compressibility. Source remains limited to 16 KiB per item. There is no partition change.
 
 New and edited scripts use the `LXS1` record format: a 24-byte little-endian header, Protobuf metadata (UUID, name, mode), and losslessly compressed Lua. The header contains codec, metadata length, source length, payload length and CRC-32. Codec 1 uses vendored Heatshrink 0.4.1 with window 10 / lookahead 5; codec 0 stores plain source when compression would not save bytes. The checksum covers the header and stored contents except its own four bytes. Existing plain Protobuf files remain readable and convert when edited. API clients still send and receive ordinary Lua source.
 
@@ -8,7 +10,7 @@ Writes use a temporary file, flush, readback/decode verification and atomic rena
 
 `LIST_SCRIPTS` returns at most 64 metadata entries. Request field 9 (`script_offset`) starts at zero; response field 11 (`next_script_offset`) is zero at the end. Continue with that offset otherwise. Offsets apply to an unchanged library; restart a listing after adding/deleting items. Updated HTTP helpers, CLI (HTTP/UART), iOS and Android clients collect all pages. Older clients that do not follow continuations see only the first page.
 
-The iOS app saves named gradient copies, lists custom animations and gradients, supports playing/stopping and deleting them, and shows search for larger libraries. Pull to refresh after uploads from another client. Editing the color wheel continues to use its separate working gradient rather than overwriting a named save. Lua animations can be uploaded through Studio or the CLI.
+The iOS app lists all three independent libraries with search and deletion. Live wheel edits and built-in presets use RAM-only commands; Save writes a named copy. Lua animations can also be saved through Studio or the CLI.
 
 ## Validation — 22 October 2026
 

@@ -18,13 +18,25 @@ PB_BIND(luxio_Wifi, luxio_Wifi, AUTO)
 PB_BIND(luxio_WifiNetwork, luxio_WifiNetwork, AUTO)
 
 
+PB_BIND(luxio_AnimationParameter, luxio_AnimationParameter, AUTO)
+
+
 PB_BIND(luxio_Script, luxio_Script, 4)
+
+
+PB_BIND(luxio_Gradient, luxio_Gradient, 2)
+
+
+PB_BIND(luxio_SavedColor, luxio_SavedColor, AUTO)
 
 
 PB_BIND(luxio_State, luxio_State, 2)
 
 
 PB_BIND(luxio_Request, luxio_Request, 4)
+
+
+PB_BIND(luxio_NetworkStatus, luxio_NetworkStatus, AUTO)
 
 
 PB_BIND(luxio_Response, luxio_Response, 4)
@@ -34,4 +46,12 @@ PB_BIND(luxio_Response, luxio_Response, 4)
 
 
 
+
+#ifndef PB_CONVERT_DOUBLE_FLOAT
+/* On some platforms (such as AVR), double is really float.
+ * To be able to encode/decode double on these platforms, you need.
+ * to define PB_CONVERT_DOUBLE_FLOAT in pb.h or compiler command line.
+ */
+PB_STATIC_ASSERT(sizeof(double) == 8, DOUBLE_MUST_BE_8_BYTES)
+#endif
 

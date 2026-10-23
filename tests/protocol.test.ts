@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { FrameDecoder, frame, encodeRequest, decodeRequest, encodeResponse, decodeResponse, colorSchema, MAX_FRAME } from '../shared/protocol/src/index.js';
 import { Device } from '../shared/device/src/device.js';
 import { Animation } from '../shared/device/src/lua.js';
-import { presets } from '../shared/web/presets.js';
+const source = 'function loop() luxio_set_pixel_color(0, 23, 51, 82) end';
 
 test('Protobuf roundtrips independent RGBCCT channels and independent power', () => {
   const request = { id: 42, operation: 1, color: colorSchema.parse({ red: 23, green: 51, blue: 82, warmWhite: 131, coolWhite: 219 }) };
@@ -28,7 +28,7 @@ test('serial/BLE framing survives arbitrary fragmentation and concatenation', ()
 });
 test('script UUID survives rename; brightness preserves animation; explicit color stops it', () => {
   const device = new Device('test');
-  const create = device.handle({ id: 1, operation: 7, script: { id: '', name: 'First', source: presets[0].source } });
+  const create = device.handle({ id: 1, operation: 7, script: { id: '', name: 'First', source: source } });
   assert.ok(create.script); const id = create.script.id;
   assert.equal(device.handle({ id: 2, operation: 10, scriptId: id }).error, undefined);
   assert.equal(device.state.activeScriptId, id);
@@ -60,18 +60,6 @@ test('Lua lifecycle, sandbox and runaway budget', () => {
   const unavailable = new Animation('function loop() luxio_set_pixel_color(0,0,0,0,10) end', 1, 'WS2812');
   assert.throws(() => unavailable.tick(), /unavailable/);
 });
-test('all bundled presets run for multiple frames with valid independent channel values', () => {
-  for (const preset of presets) {
-    const animation = new Animation(preset.source, 60, 'WS2805');
-    for (let tick = 0; tick < 40; tick++) {
-      const frame = animation.tick();
-      assert.equal(frame.length, 60);
-      assert.ok(frame.every(pixel => Object.values(pixel).every(value => Number.isInteger(value) && value >= 0 && value <= 255)), preset.name);
-    }
-    animation.close();
-  }
-});
-
 test('Wi-Fi scan protocol preserves negative RSSI, security and asynchronous status', () => {
   assert.equal(decodeRequest(encodeRequest({ id: 81, operation: 16 })).operation, 16);
   const networks = [
@@ -83,4 +71,10 @@ test('Wi-Fi scan protocol preserves negative RSSI, security and asynchronous sta
   assert.equal(response.wifiScanning, false);
   assert.equal(decodeResponse(encodeResponse({ id: 82, wifiScanning: true })).wifiScanning, true);
   assert.equal(decodeResponse(encodeResponse({ id: 83, wifiScanError: 'Scan failed' })).wifiScanError, 'Scan failed');
+});
+
+test('runtime animation failures are separate from request errors', () => {
+  const response = decodeResponse(encodeResponse({ id: 84, animationError: 'Animation exceeded its instruction budget' }));
+  assert.equal(response.error, '');
+  assert.equal(response.animationError, 'Animation exceeded its instruction budget');
 });

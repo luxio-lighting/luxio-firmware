@@ -1,12 +1,18 @@
+import { parsePreview } from '../../protocol/src/preview.js';
+import { parseParameters, updateParameters, type AnimationParameter } from '../../protocol/src/parameters.js';
 import { lua, lauxlib, lualib, to_luastring, to_jsstring } from 'fengari';
 import type { Color } from '../../protocol/src/index.js';
 
 export class Animation {
   private L: any;
   pixels: Color[];
+  preview: Color[];
   elapsed = 0;
-  constructor(source: string, count: number, stripType: string) {
-    if (new TextEncoder().encode(source).length > 16384) throw new Error('Script exceeds 16 KiB');
+  parameters: AnimationParameter[];
+  constructor(readonly source: string, count: number, stripType: string, parameters: AnimationParameter[] = []) {
+    if (new TextEncoder().encode(source).length > 16384) throw new Error('Animation exceeds 16 KiB');
+    this.preview = parsePreview(source);
+    this.parameters = parseParameters(source, parameters);
     this.pixels = Array.from({ length: count }, () => ({ red: 0, green: 0, blue: 0, white: 0, warmWhite: 0, coolWhite: 0 }));
     this.L = lauxlib.luaL_newstate();
     const L = this.L;
@@ -18,6 +24,14 @@ export class Animation {
     lua.lua_setglobal(L, to_luastring('luxio_get_pixel_count'));
     lua.lua_pushcfunction(L, () => { lua.lua_pushinteger(L, this.elapsed); return 1; });
     lua.lua_setglobal(L, to_luastring('luxio_millis'));
+    lua.lua_pushcfunction(L, () => {
+      const name = to_jsstring(lauxlib.luaL_checkstring(L, 1));
+      const parameter = this.parameters.find(p => p.name === name);
+      if (!parameter) return lauxlib.luaL_error(L, to_luastring(`Unknown animation parameter: ${name}`));
+      if (parameter.boolean) lua.lua_pushboolean(L, parameter.value !== 0); else lua.lua_pushnumber(L, parameter.value);
+      return 1;
+    });
+    lua.lua_setglobal(L, to_luastring('luxio_get_parameter'));
     lua.lua_pushcfunction(L, () => {
       const index = lauxlib.luaL_checkinteger(L, 1);
       if (index < 0 || index >= count) return lauxlib.luaL_error(L, to_luastring('Pixel index out of range (zero-based)'));
@@ -57,6 +71,7 @@ export class Animation {
       const message = to_jsstring(lua.lua_tostring(L, -1)); this.close(); throw new Error(message);
     }
   }
+  update(parameters: AnimationParameter[]) { this.parameters = updateParameters(this.parameters, parameters); }
   tick(milliseconds = 33) { this.elapsed += milliseconds; this.call('loop'); return this.pixels; }
   close() { if (this.L) lua.lua_close(this.L); this.L = null; }
 }

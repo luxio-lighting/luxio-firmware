@@ -7,8 +7,12 @@ for source in Luxio/src/vendor/heatshrink/heatshrink_encoder.c Luxio/src/vendor/
 done
 c++ -std=c++17 -I Luxio/src/vendor/nanopb -g -fsanitize=address,undefined tools/test-script-storage.cpp Luxio/src/script_storage.cpp .sdk/storage-test/*.o -o .sdk/test-script-storage
 .sdk/test-script-storage
+c++ -std=c++17 -I Luxio/src/vendor/nanopb -g -fsanitize=address,undefined tools/test-native-resources.cpp Luxio/src/gradient_storage.cpp Luxio/src/color_storage.cpp .sdk/storage-test/pb_*.o .sdk/storage-test/luxio.pb.c.o -o .sdk/test-native-resources
+.sdk/test-native-resources
 for source in tools/vendor/littlefs/lfs.c tools/vendor/littlefs/lfs_util.c; do
   cc -g -fsanitize=address,undefined -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR -c "$source" -o ".sdk/storage-test/$(basename "$source").o"
 done
 c++ -std=c++17 -I Luxio/src/vendor/nanopb -g -fsanitize=address,undefined tools/test-script-filesystem.cpp Luxio/src/script_storage.cpp .sdk/storage-test/*.o -o .sdk/test-script-filesystem
 .sdk/test-script-filesystem tools/fixtures/scripts/*.lua
+c++ -std=c++17 -I Luxio/src/vendor/nanopb -g -fsanitize=address,undefined tools/test-animation-parameters.cpp Luxio/src/animation_parameters.cpp Luxio/src/script_storage.cpp .sdk/storage-test/*.o -o .sdk/test-animation-parameters
+.sdk/test-animation-parameters

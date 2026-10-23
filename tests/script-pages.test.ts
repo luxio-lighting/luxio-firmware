@@ -21,6 +21,6 @@ test('HTTP lists every page and rejects invalid continuations', async () => {
     assert.deepEqual(offsets, [0, 64, 128]);
     assert.equal(result.scripts.length, 150); assert.equal(result.scripts[149].id, '149');
     broken = true;
-    await assert.rejects(requestHttp(target, { id: 2, operation: 5 }), /Invalid script listing continuation/);
+    await assert.rejects(requestHttp(target, { id: 2, operation: 5 }), /Invalid animation listing continuation/);
   } finally { server.close(); }
 });

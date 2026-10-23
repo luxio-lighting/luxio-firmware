@@ -16,7 +16,7 @@ try {
   let full = false;
   for (let i = 0; i < 512; i++) {
     try {
-      const script = (await requestHttp(address, { id: id++, operation: 7, script: { id: '', name: `Storage test ${i}`, source: sources[i % sources.length], mode: i % 2 ? 1 : 2 } })).script!;
+      const script = (await requestHttp(address, { id: id++, operation: 7, script: { id: '', name: `Storage test ${i}`, source: sources[i % sources.length], mode: 2 } })).script!;
       created.push(script);
       await writeFile('.sdk/storage10-test-created.json', JSON.stringify(created));
     } catch (error) {
