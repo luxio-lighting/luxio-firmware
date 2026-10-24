@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Fir
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=29 tools/build-firmware.sh all
+LUXIO_BUILD=30 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=29 tools/build-firmware.sh esp32
+LUXIO_BUILD=30 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -233,3 +233,19 @@ send an explicit relay message with enabled=false.
 
 GLEDOPTO references: [current manufacturer product page and manual](https://www.gledopto.com/h-pd-91.html),
 [older GPIO12 manual](https://www.gledopto.eu/mediafiles/anleitungen/7002-gl-c-016wl-d-eng.pdf).
+
+## Response and TLS memory (build 30)
+
+Protobuf responses allocate their actual encoded size on HTTP, WebSocket, USB and
+BLE, retaining the 32 KiB protocol limit. The build reconstructs the pinned SDK's
+TLS record layer with 16 KiB receive and 4 KiB transmit buffers, saving 12 KiB per
+connection without changing SDK features or public layouts. Source archives are
+checksum-pinned and cached under `.sdk/tls`; the first build requires HTTPS access
+to GitHub. The installed Arduino SDK is unchanged. Dynamic TLS buffers remain off.
+
+The opt-in concurrency test requires an already running animation and temporarily
+changes LED count to 100, then restores the count and current lighting selection:
+
+```sh
+DEVICE_ADDRESS=192.0.2.10 EXPECTED_BUILD=30 node --import tsx tools/test-memory-device.ts
+```

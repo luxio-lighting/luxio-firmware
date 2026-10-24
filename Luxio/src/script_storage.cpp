@@ -22,7 +22,7 @@ static uint32_t recordChecksum(const uint8_t *bytes, size_t size) {
 size_t encodeStoredScript(const luxio_Script &script, uint8_t *output, size_t capacity) {
   const size_t sourceSize = strnlen(script.source, sizeof(script.source));
   const size_t nameSize = strnlen(script.name, sizeof(script.name));
-  if (capacity < SCRIPT_RECORD_MAX || !sourceSize || sourceSize >= sizeof(script.source) ||
+  if (capacity < 24 || !sourceSize || sourceSize >= sizeof(script.source) ||
       !nameSize || nameSize >= sizeof(script.name) || strnlen(script.id, sizeof(script.id)) != 36) return 0;
   auto metadata = pb_ostream_from_buffer(output + 24, capacity - 24);
   if (!pb_encode_tag(&metadata, PB_WT_STRING, 1) || !pb_encode_string(&metadata, reinterpret_cast<const uint8_t *>(script.id), 36) ||
@@ -36,7 +36,7 @@ size_t encodeStoredScript(const luxio_Script &script, uint8_t *output, size_t ca
   for (size_t i = 0; i < script.preview_count; ++i) {
     if (!pb_encode_tag(&metadata, PB_WT_STRING, 6) || !pb_encode_submessage(&metadata, luxio_Color_fields, &script.preview[i])) return 0;
   }
-  if (metadata.bytes_written > 2048) return 0;
+  if (metadata.bytes_written > 2048 || sourceSize > capacity - 24 - metadata.bytes_written) return 0;
   uint8_t *payload = output + 24 + metadata.bytes_written;
   std::unique_ptr<heatshrink_encoder, decltype(&heatshrink_encoder_free)> encoder(heatshrink_encoder_alloc(10, 5), heatshrink_encoder_free);
   size_t consumed = 0, written = 0;

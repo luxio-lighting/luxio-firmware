@@ -10,8 +10,9 @@
 #include <esp32-hal-bt.h>
 #include <esp_heap_caps.h>
 #include "control_error.h"
+#include <memory>
 
-extern size_t dispatch(const uint8_t *, size_t, uint8_t *, size_t);
+extern size_t dispatch(const uint8_t *, size_t, std::unique_ptr<uint8_t[]> &, size_t);
 static NimBLEServer *server;
 static NimBLECharacteristic *tx;
 static SemaphoreHandle_t bufferMutex;
@@ -97,13 +98,11 @@ void startBluetooth() {
       }
       const uint32_t peerSession = session;
       const uint16_t peer = connection;
-      const size_t capacity = psramFound() ? 32768 : 8192;
-      auto *allocated = static_cast<uint8_t *>(heap_caps_malloc(capacity + 8, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-      if (!allocated) allocated = static_cast<uint8_t *>(malloc(capacity + 8));
+      std::unique_ptr<uint8_t[]> allocated;
+      size_t length = dispatch(receiveBuffer, received, allocated, 8);
       uint8_t fallback[56];
-      uint8_t *output = allocated ? allocated : fallback;
-      size_t length = allocated ? dispatch(receiveBuffer, received, output + 8, capacity) : 0;
-      if (!length) length = encodeControlError(receiveBuffer, received, output + 8, allocated ? capacity : sizeof(fallback) - 8);
+      uint8_t *output = allocated.get();
+      if (!length) { output = fallback; length = encodeControlError(receiveBuffer, received, output + 8, sizeof(fallback) - 8); }
       free(receiveBuffer); receiveBuffer = nullptr;
       memcpy(output, "LXP1", 4);
       output[4] = length >> 24; output[5] = length >> 16; output[6] = length >> 8; output[7] = length;
@@ -128,7 +127,7 @@ void startBluetooth() {
         if (!notified) break;
         offset += chunk; vTaskDelay(pdMS_TO_TICKS(15));
       }
-      free(allocated);
+      allocated.reset();
       xSemaphoreTake(bufferMutex, portMAX_DELAY);
       if (session == peerSession) ready = false;
       xSemaphoreGive(bufferMutex);

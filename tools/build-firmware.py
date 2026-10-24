@@ -33,16 +33,18 @@ for target in matrix:
     directory.mkdir(parents=True, exist_ok=True)
     # A failed rebuild must never leave an apparently current release behind.
     shutil.rmtree(directory / 'release', ignore_errors=True)
-    build = os.environ.get('LUXIO_BUILD', '29')
+    build = os.environ.get('LUXIO_BUILD', '30')
     assert build.isdigit() and 0 < int(build) <= 2147483647, 'Invalid LUXIO_BUILD'
     print(f'Building {chip} ({target["architecture"]}), build {build}', flush=True)
     try:
+        subprocess.run([sys.executable, 'tools/build-tls.py', chip], check=True)
+        sdk = root / '.sdk/arduino/packages/esp32/tools/esp32-arduino-libs/idf-release_v5.5-f1a1df9b-v3' / chip
         for sketch, folder, capacity in [('Luxio', 'main', target['applicationSize']), ('Recovery', 'recovery', target['recoverySize'])]:
             source = directory / 'sources' / sketch
             shutil.rmtree(source, ignore_errors=True)
             shutil.copytree(root / sketch, source)
             (source / 'partitions.csv').write_text(f"# Name,Type,SubType,Offset,Size,Flags\nnvs,data,nvs,0x9000,0x5000,\notadata,data,ota,0xe000,0x2000,\nloader,app,factory,0x10000,{target['recoverySize']:#x},\napp0,app,ota_0,{target['applicationAddress']:#x},{target['applicationSize']:#x},\nspiffs,data,spiffs,{target['minimumFlashSize']-0x50000:#x},0x40000,\ncoredump,data,coredump,{target['minimumFlashSize']-0x10000:#x},0x10000,\n")
-            flags = f'-DLUA_USE_C89 -DPB_ENABLE_MALLOC -fstack-usage -I{root}/Luxio/src/vendor/nanopb'
+            flags = f'-include {directory}/tls/tls-config.h -DLUA_USE_C89 -DPB_ENABLE_MALLOC -fstack-usage -I{root}/Luxio/src/vendor/nanopb'
             if sketch == 'Luxio' and chip == 'esp32' and matter == '0':
                 library = root / '.sdk/user/libraries/NimBLE-Arduino/library.properties'
                 assert library.exists() and 'version=2.5.1' in library.read_text(), 'Run tools/bootstrap-firmware.sh to install NimBLE-Arduino 2.5.1'
@@ -53,6 +55,9 @@ for target in matrix:
                        '--build-path', str(directory / folder)]
             if sketch == 'Luxio' and matter == '1':
                 cpp += ' -DLUXIO_NETWORK_ONLY_MATTER=1'
+            libs = (sdk / 'flags/ld_libs').read_text()
+            assert '-lmbedtls_2' in libs
+            libs = libs.replace('-lmbedtls_2', str(directory / 'tls/libmbedtls_2.a'))
             if sketch == 'Luxio' and chip != 'esp32' and matter == '1':
                 # Do not alter the installed SDK or another target's archive.
                 # The pinned SDK has no API to relinquish its BLE host without
@@ -74,11 +79,11 @@ for target in matrix:
                     assert len(matches) == 1, f'Unsupported SDK BLE ABI: {method}: {matches}'
                     selected += ['--weaken-symbol', matches[0]]
                 subprocess.run([str(objcopy), *selected, str(original), str(archive)], check=True)
-                libs = (sdk / 'flags/ld_libs').read_text()
                 assert '-lespressif__esp_matter' in libs
-                link_libraries = directory / 'matter-network-only-libs'
-                link_libraries.write_text(libs.replace('-lespressif__esp_matter', str(archive)))
-                command += ['--build-property', f'compiler.c.elf.libs=@{link_libraries}']
+                libs = libs.replace('-lespressif__esp_matter', str(archive))
+            link_libraries = directory / f'{folder}-libs'
+            link_libraries.write_text(libs)
+            command += ['--build-property', f'compiler.c.elf.libs=@{link_libraries}']
             for prop in [f'upload.maximum_size={capacity}', f'runtime.tools.ctags.path={ctags}',
                          f'tools.ctags.path={ctags}', f'compiler.c.extra_flags={flags}', f'compiler.cpp.extra_flags={cpp}']:
                 command += ['--build-property', prop]

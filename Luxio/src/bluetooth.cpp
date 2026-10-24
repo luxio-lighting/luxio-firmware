@@ -3,6 +3,7 @@
 // Luxio owns BLE; Matter uses IP transports only.
 #include <esp_heap_caps.h>
 #include "control_error.h"
+#include <memory>
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
 #include <host/ble_hs.h>
@@ -12,7 +13,7 @@
 
 extern "C" void ble_store_config_init(void);
 
-extern size_t dispatch(const uint8_t *, size_t, uint8_t *, size_t);
+extern size_t dispatch(const uint8_t *, size_t, std::unique_ptr<uint8_t[]> &, size_t);
 // e97b1000-3c27-4a20-9df4-7d025bc7e451; RX 1001, TX 1002.
 static const ble_uuid128_t serviceUuid = BLE_UUID128_INIT(0x51,0xe4,0xc7,0x5b,0x02,0x7d,0xf4,0x9d,0x20,0x4a,0x27,0x3c,0x00,0x10,0x7b,0xe9);
 static const ble_uuid128_t rxUuid = BLE_UUID128_INIT(0x51,0xe4,0xc7,0x5b,0x02,0x7d,0xf4,0x9d,0x20,0x4a,0x27,0x3c,0x01,0x10,0x7b,0xe9);
@@ -109,13 +110,11 @@ void startBluetooth() {
       }
       const uint16_t peer = connection;
       const uint32_t peerSession = session;
-      const size_t capacity = psramFound() ? 32768 : 8192;
-      auto *allocated = static_cast<uint8_t *>(heap_caps_malloc(capacity + 8, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-      if (!allocated) allocated = static_cast<uint8_t *>(malloc(capacity + 8));
+      std::unique_ptr<uint8_t[]> allocated;
+      size_t length = dispatch(receiveBuffer, received, allocated, 8);
       uint8_t fallback[56];
-      uint8_t *output = allocated ? allocated : fallback;
-      size_t length = allocated ? dispatch(receiveBuffer, received, output + 8, capacity) : 0;
-      if (!length) length = encodeControlError(receiveBuffer, received, output + 8, allocated ? capacity : sizeof(fallback) - 8);
+      uint8_t *output = allocated.get();
+      if (!length) { output = fallback; length = encodeControlError(receiveBuffer, received, output + 8, sizeof(fallback) - 8); }
       free(receiveBuffer); receiveBuffer = nullptr;
       output[0]=0x4c; output[1]=0x58; output[2]=0x50; output[3]=0x31;
       output[4]=length>>24; output[5]=length>>16; output[6]=length>>8; output[7]=length;
@@ -137,7 +136,7 @@ void startBluetooth() {
         if (!sent) break;
         offset += chunk; vTaskDelay(pdMS_TO_TICKS(8));
       }
-      free(allocated);
+      allocated.reset();
       xSemaphoreTake(bufferMutex, portMAX_DELAY); if (session == peerSession) ready = false; xSemaphoreGive(bufferMutex);
     }
   }, "luxio-ble-api", 6144, nullptr, 1, nullptr);

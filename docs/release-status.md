@@ -216,3 +216,51 @@ Build 29 is committed for further qualification but is not published to the API.
 The public channel remains on build 28. Additional TLS/request-memory work is
 required before publishing this candidate; the RMT saving alone does not resolve
 all no-PSRAM concurrency limits.
+
+## Build 30 response and TLS memory candidate (2026-10-25)
+
+All transports now size Protobuf replies before allocating them, under the state
+mutex; the 32 KiB wire limit remains. HTTP/USB/BLE return bounded emergency errors
+when allocations fail. WebSocket broadcasts also use exact-sized output. Storage
+scratch allocations are scoped to their operation: reads use the stored length,
+color/gradient writes use the encoded length, and script writes reserve source
+length plus the bounded metadata/header size. Cloud announcements copy only the
+fields they send, and completed HTTPS connections close before parsing JSON.
+
+`tools/build-tls.py` rebuilds the 17 TLS record-layer objects from the exact pinned
+Espressif Mbed TLS source revision, with SHA-256 archive/header checks and ABI
+size/alignment comparisons. All SDK feature switches remain unchanged. RX stays
+16 KiB; TX becomes 4 KiB, saving 12 KiB per connection. The installed SDK is not
+modified. Dynamic TLS buffers are not enabled: they conflict with the SDK's DTLS
+configuration and require broader SDK rebuilding.
+
+TypeScript, host/native regression tests, and all five chip builds pass, including
+partition and stack budgets. Tests cover exact-sized replies, full 16 KiB script
+responses, callback lists, failed allocations, wire limits and smaller storage
+scratch buffers. Final packaged sizes:
+
+| Chip | Main bytes | Recovery bytes |
+| --- | --- | --- |
+| esp32 | 2,165,408 | 1,117,136 |
+| esp32s3 | 2,296,624 | 1,100,624 |
+| esp32c3 | 2,352,736 | 1,180,752 |
+| esp32c5 | 3,023,056 | 1,239,632 |
+| esp32c6 | 2,993,104 | 1,186,944 |
+
+The GLEDOPTO ran build 30 with the response/TLS changes and Knight Rider at
+brightness 4. Thirty HTTPS update checks passed with 100 LEDs, 332 HTTP polls,
+332 WebSocket replies and active broadcast generation. Lowest sampled free
+internal RAM was 6,876 bytes, with a 4,340-byte largest block. The test's final
+assertion initially expected repeated identical state broadcasts; only one was
+correctly emitted because state did not change. All 30 rounds had completed and
+the saved results pass the corrected assertion. LED count returned to 60 and the
+current animation was restored. The subsequent smaller storage-scratch adjustment
+has host/build coverage; it was not in this physical soak image.
+
+This still leaves too little headroom to enable Bluetooth and Matter together on
+this no-PSRAM board. Visual LED output remains unconfirmed by the user. Build 30
+is not publicly published; the next change moves advisory checks and signed
+announcements to HTTP, retaining independently authenticated HTTPS in recovery.
+The current production API redirects HTTP to HTTPS and needs device-route
+exceptions managed by the server owner. TLS pinning and signed OTA transport
+alternatives were discussed but have not been implemented.

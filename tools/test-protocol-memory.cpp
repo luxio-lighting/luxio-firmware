@@ -6,6 +6,14 @@
 #include "pb_decode.h"
 #include "pb_encode.h"
 #include "control_error.h"
+#include "control_response.h"
+static bool failOutputAllocation = false;
+static size_t outputAllocation = 0;
+void *operator new[](size_t size, const std::nothrow_t &) noexcept {
+  outputAllocation = size;
+  if (failOutputAllocation) return nullptr;
+  try { return ::operator new[](size); } catch (...) { return nullptr; }
+}
 int main() {
   static_assert(sizeof(luxio_Request) < 2000);
   static_assert(sizeof(luxio_Response) < 3000);
@@ -45,6 +53,15 @@ int main() {
   strcpy(response.network_status.dns[1], "1.1.1.1");
   auto encoder = pb_ostream_from_buffer(bytes, sizeof(bytes));
   assert(pb_encode(&encoder, luxio_Response_fields, &response));
+  // Full scripts must not depend on the old 8 KiB low-memory transport cap.
+  for (size_t prefix : {size_t(0), size_t(8)}) {
+    std::unique_ptr<uint8_t[]> exact;
+    const size_t size = encodeControlResponse(response, exact, prefix);
+    assert(size == encoder.bytes_written && size > 16384);
+    assert(outputAllocation == size + prefix);
+    assert(!memcmp(exact.get() + prefix, bytes, size));
+    if (prefix) { memset(exact.get(), 0xa5, prefix); assert(!memcmp(exact.get() + prefix, bytes, size)); }
+  }
   luxio_Response decoded = luxio_Response_init_zero;
   auto decoder = pb_istream_from_buffer(bytes, encoder.bytes_written);
   assert(pb_decode(&decoder, luxio_Response_fields, &decoded));
@@ -108,5 +125,33 @@ int main() {
     assert(decoded.id == id && !strcmp(decoded.error, "Not enough memory for this request"));
     assert(!encodeControlError(bytes, encoder.bytes_written, emergency, 1));
   }
+  std::unique_ptr<uint8_t[]> exact;
+  response = luxio_Response_init_zero;
+  response.id = 42; response.state = &state;
+  size_t size = encodeControlResponse(response, exact, 0);
+  assert(size > 0 && size < 128); // Small status replies stay small.
+  assert(outputAllocation == size);
+  failOutputAllocation = true;
+  assert(!encodeControlResponse(response, exact, 0) && !exact);
+  failOutputAllocation = false;
+  assert(!encodeControlResponse(response, exact, 9) && !exact);
+  // Callback listings run for sizing and encoding with stable pagination.
+  response.scripts.arg = &script;
+  response.scripts.funcs.encode = [](pb_ostream_t *out, const pb_field_t *field, void *const *arg) {
+    return pb_encode_tag_for_field(out, field) && pb_encode_submessage(out, luxio_Script_fields, *arg);
+  };
+  size = encodeControlResponse(response, exact, 0);
+  assert(size > 16384);
+  decoded = luxio_Response_init_zero;
+  decoder = pb_istream_from_buffer(exact.get(), size);
+  assert(pb_decode(&decoder, luxio_Response_fields, &decoded) && decoded.id == 42);
+  pb_release(luxio_Response_fields, &decoded);
+  response.scripts.funcs.encode = [](pb_ostream_t *out, const pb_field_t *field, void *const *arg) {
+    for (int i = 0; i < 3; i++) if (!pb_encode_tag_for_field(out, field) || !pb_encode_submessage(out, luxio_Script_fields, *arg)) return false;
+    return true;
+  };
+  assert(!encodeControlResponse(response, exact, 0) && !exact); // Wire limit still enforced.
+  response.scripts.funcs.encode = [](pb_ostream_t *, const pb_field_t *, void *const *) { return false; };
+  assert(!encodeControlResponse(response, exact, 0) && !exact);
   puts("PASS: compact control structs, full 16 KB scripts, malformed payload cleanup and release");
 }

@@ -49,8 +49,12 @@ int main(int argc, char **argv) {
     for (bool repetitive : {false, true}) {
       for (size_t i = 0; i < length; ++i) script.source[i] = repetitive ? 'x' : char(1 + random() % 255);
       script.source[length] = 0;
-      size = encodeStoredScript(script, bytes, sizeof(bytes));
+      std::vector<uint8_t> sized(24 + 2048 + length);
+      size = encodeStoredScript(script, sized.data(), sized.size());
       assert(size && size <= length + 152);
+      memcpy(bytes, sized.data(), size);
+      assert(!encodeStoredScript(script, sized.data(), 23));
+      assert(!encodeStoredScript(script, sized.data(), 24 + length));
       assert(decodeStoredScript(bytes, size, decoded));
       assert(!memcmp(script.source, decoded.source, length + 1));
       if (repetitive && length >= 1024) assert(size < length / 2);
