@@ -4,6 +4,21 @@ on:
   push:
     tags: ['firmware-*']
   workflow_dispatch:
+    inputs:
+      build:
+        description: Firmware build number (increase for each new release)
+        type: number
+        required: true
+        default: 24
+      publish:
+        description: Upload binaries to MongoDB through the API and register updates
+        type: boolean
+        default: false
+      channel:
+        description: Publication channel (0 is available in Setup)
+        type: choice
+        options: ['100', '0']
+        default: '100'
 permissions:
   contents: read
 jobs:
@@ -11,10 +26,21 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       chips: ${{ steps.targets.outputs.chips }}
+      build: ${{ steps.targets.outputs.build }}
     steps:
       - uses: actions/checkout@v4
       - id: targets
-        run: python3 -c 'import json,os; open(os.environ["GITHUB_OUTPUT"], "a").write("chips=" + json.dumps([t["chip"] for t in json.load(open("targets.json"))]) + "\n")'
+        env:
+          BUILD_NUMBER: ${{ inputs.build || github.run_number }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          build = int(os.environ['BUILD_NUMBER'])
+          assert 0 < build <= 2147483647
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('chips=' + json.dumps([t['chip'] for t in json.load(open('targets.json'))]) + '\n')
+              output.write(f'build={build}\n')
+          PY
   build:
     needs: matrix
     runs-on: ubuntu-latest
@@ -28,7 +54,7 @@ jobs:
       - run: tools/bootstrap-firmware.sh
       - name: Build firmware and enforce image identity, partition sizes and stack budgets
         env:
-          LUXIO_BUILD: ${{ github.run_number }}
+          LUXIO_BUILD: ${{ needs.matrix.outputs.build }}
           LUXIO_MATTER: '1'
         run: tools/build-firmware.sh '${{ matrix.chip }}'
       - uses: actions/upload-artifact@v4
@@ -41,3 +67,26 @@ jobs:
         run: |
           echo 'Release blocked: complete Matter/GATT integration and hardware qualification (docs/release-status.md).'
           exit 1
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: [matrix, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*-${{ github.run_number }}
+          path: packages
+      - name: Upload, verify downloads and register each chip
+        env:
+          UPDATE_PUBLISH_TOKEN: ${{ secrets.UPDATE_PUBLISH_TOKEN }}
+          LUXIO_CHANNEL: ${{ inputs.channel }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          test -n "$UPDATE_PUBLISH_TOKEN" || { echo 'Configure UPDATE_PUBLISH_TOKEN in Actions secrets.'; exit 1; }
+          for chip in $(python3 -c 'import json; print(" ".join(t["chip"] for t in json.load(open("targets.json"))))'); do
+            node tools/publish-update.mjs "packages/firmware-$chip-$RUN_NUMBER/manifest.local.json" --upload
+          done

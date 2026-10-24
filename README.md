@@ -56,6 +56,10 @@ To prepare publishable manifests after building, set `LUXIO_FIRMWARE_BASE_URL` t
 
 Builds default to channel 100 in their manifests. Public channel 0 publication remains a separate release decision and hardware qualification is not implied by compilation. No command in the matrix build flashes a device, uploads files or registers an OTA update.
 
+The **Firmware** GitHub workflow now has explicit manual inputs for `build`, `publish` and `channel`. On `main`, selecting `publish=true` uploads all five successful build packages through the API into MongoDB, verifies the public downloads, and registers the releases. Set `UPDATE_PUBLISH_TOKEN` in repository Actions secrets to the API's configured token. Select channel `0` to make a build available to Setup; `100` is the default development channel. Use a new increasing build number for changed binaries; identical publication retries are safe. Pull requests never publish, and automatic tagged releases retain their qualification gate. Manual publication does not imply hardware qualification.
+
+For the same operation locally, run `LUXIO_CHANNEL=0 node tools/publish-update.mjs build/<chip>/release/manifest.local.json --upload` with `UPDATE_PUBLISH_TOKEN` set. The upload endpoint uses immutable SHA-256 URLs at `https://api.luxio.lighting/firmware/<sha256>`; no external binary host is needed. `LUXIO_API_URL` overrides the HTTPS API origin. All local files are validated before the first upload, and all downloads are validated before metadata registration.
+
 ## Verification and protocol generation
 
 ```sh
