@@ -287,7 +287,7 @@ exercised with Node signatures for all five chip names, including wrong key,
 wrong chip, changed metadata, wrong URL, missing signature and rollback cases.
 Physical qualification and final matrix sizes are recorded below when complete.
 
-Final build 32 packages:
+Local qualification build 32 packages:
 
 | Chip | Application bytes | Recovery bytes |
 | --- | ---: | ---: |
@@ -311,3 +311,16 @@ Main/recovery package checks and compiler stack budgets pass on all five chips.
 Cloud stack frames are 1,504 bytes (Xtensa) / 1,520 bytes (RISC-V), below the
 3,072-byte cap. Other board families remain compile-qualified only. Matter and
 original-ESP32 BLE eligibility are unchanged; visual output is not user-confirmed.
+
+Build 32 was signed and published on channel 0 by workflow
+[40138387220](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40138387220)
+from commit `eb48eb8`. All five API manifests, application hashes and recovery
+hashes/descriptors were independently fetched and verified after publication.
+Linux-built release images are 16 bytes smaller than the local qualification
+images above; the firmware source and configuration are the same.
+
+The GLEDOPTO runs production application/recovery build 32 and its original
+60-LED Knight Rider animation, brightness, power and GPIO18 relay configuration
+were restored. The production 100-LED memory check encountered an HTTP 302
+redirect to HTTPS after the API deployment; this is a proxy configuration block,
+not a TLS allocation failure. The server owner is correcting HTTP routing.
