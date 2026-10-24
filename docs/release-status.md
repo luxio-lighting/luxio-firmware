@@ -77,7 +77,10 @@ gpio and inverted; an omitted message preserves existing settings for older
 clients. The relay follows power and Identify, allows the off fade to finish,
 and waits 20 ms after enabling power before sending LED data. Pin validation
 rejects data-pin conflicts and the chip's reserved serial/flash/PSRAM/USB pins.
-GL-C-016WL-D uses GPIO12 without inversion; there is no automatic board detection.
+GL-C-016WL-D hardware revisions differ: older documentation specifies GPIO12
+without inversion; the current manufacturer manual specifies GPIO18 with inversion.
+Our physically tested unit requires GPIO18 without inversion. There is no automatic
+board detection. Data uses GPIO16 for these mappings.
 
 The final original-ESP32 application passed physical USB and HTTP checks on the
 GL-C-016WL-D: default-disabled migration, GPIO12 configuration, invalid-pin
@@ -85,17 +88,34 @@ rejection, legacy SET_CONFIG preservation, inversion/disable roundtrips, two
 reboots with persisted relay settings, 16 framed USB state replies and five HTTP
 state reads. SSID/gateway/DNS were present after association and DHCP completed.
 The user's identity, Wi-Fi credentials and strip configuration were retained;
-its unsaved lighting preview was restored after the reboot tests. GPIO12 remains
-explicitly enabled on this test device, independently of the disabled default.
+its unsaved lighting preview was restored after the reboot tests. Relay configuration on this test device is explicit, independently of the disabled
+default.
 The user reported 24 V at the controller input but 0 V at its LED output under
 both relay polarities. A temporary diagnostic build confirmed GPIO12 output
 enable and GPIO routing, with the output register switching high/low as requested
 and its output disabled when Relay was disabled. The diagnostic build is not part
-of the release. The controller's power-path issue remains unresolved; settings and
-GPIO register checks alone do not establish visible LED operation.
+of the release. These GPIO12 checks did not establish visible LED operation; subsequent testing
+resolved the issue with GPIO18, as recorded below.
 
 Host validation passes TypeScript checking, all 32 application tests and native
 protocol, storage, transition, packaging and target-layout tests. The ESP32 main
 image is 2,148,464 bytes; recovery is 1,102,608 bytes. Compiler stack checks pass.
 Mobile checks include native Swift codec tests, an iOS settings save/reopen UI
 test, an iOS simulator build, and Android unit tests/debug APK build.
+
+Build 27 was published successfully by workflow run 40127940237. Independent API
+checks downloaded all five parts for ESP32/S3/C3/C5/C6 and verified build number,
+channel, target, size, SHA256, embedded chip ID and flash addresses.
+
+Further controller diagnosis: the user confirmed the same hardware worked with
+WLED. A minimal GPIO12-only application read the driven pin back as high, but the
+user still measured 0 V at the LED output. The current manual linked from the
+[manufacturer product page](https://www.gledopto.com/h-pd-91.html) specifies GPIO18
+with inversion, unlike the older manual used initially. The normal build-27
+application was restored and verified, and GPIO18 inverted was configured. HTTP
+confirmed the settings, power on and restored lighting preview. The user reported
+output power following the opposite app state with inversion enabled. GPIO18 was
+then set to inversion off and power on; the user confirmed that it now works as
+expected. The final tested device configuration is data GPIO16, relay GPIO18,
+inversion off. The release default remains relay disabled. Saved system/NVS and storage partitions were backed up
+and checked against device MD5 before the diagnostic; they were not overwritten.

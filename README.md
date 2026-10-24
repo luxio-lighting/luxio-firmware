@@ -172,7 +172,12 @@ physical boards.
 Build 27 adds `Config.relay` (`enabled`, `gpio`, `inverted`). It defaults to
 disabled, so existing controllers keep their current behavior. Enable Relay in
 mobile settings, choose its GPIO, and enable inversion only for an active-low
-relay. GL-C-016WL-D uses GPIO12 with inversion off. The relay follows power and
+relay. GL-C-016WL-D has different hardware revisions: the older manual specifies
+GPIO12 without inversion, while the current manufacturer manual specifies GPIO18
+with inversion. Our physically tested unit instead requires GPIO18 with inversion
+off; the user confirmed normal LED operation with that configuration. Data remains
+GPIO16. Check the controller revision and verify that app On supplies strip power;
+the model name alone does not identify the relay wiring or polarity. The relay follows power and
 Identify, stays on through an off fade, and allows 20 ms for power to settle
 before LED data. A disabled relay pin is released as an input after being driven
 inactive. Reserved pins and a shared relay/data GPIO are rejected.
@@ -180,3 +185,6 @@ inactive. Reserved pins and a shared relay/data GPIO are rejected.
 An omitted relay message in SET_CONFIG preserves the current relay configuration,
 so older clients can still edit other settings. To disable an existing relay,
 send an explicit relay message with enabled=false.
+
+GLEDOPTO references: [current manufacturer product page and manual](https://www.gledopto.com/h-pd-91.html),
+[older GPIO12 manual](https://www.gledopto.eu/mediafiles/anleitungen/7002-gl-c-016wl-d-eng.pdf).
