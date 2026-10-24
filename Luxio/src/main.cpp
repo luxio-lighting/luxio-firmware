@@ -6,8 +6,8 @@
 #include <LittleFS.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
-#include <NetworkClientSecure.h>
-#include "update_job.h"
+#include <NetworkClient.h>
+#include "signed_update.h"
 #include "script_storage.h"
 #include "animation_parameters.h"
 #include "gradient.h"
@@ -39,7 +39,7 @@ extern "C" {
 #define LUXIO_BUILD 1
 #endif
 #ifndef LUXIO_CLOUD_URL
-#define LUXIO_CLOUD_URL "https://api.luxio.lighting"
+#define LUXIO_CLOUD_URL "http://api.luxio.lighting"
 #endif
 #ifndef LUXIO_MATTER
 #define LUXIO_MATTER 1
@@ -669,9 +669,11 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
     case luxio_Operation_INSTALL_UPDATE: {
       const auto *loader = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, "loader");
       const auto *running = esp_ota_get_running_partition();
+      esp_app_desc_t loaderDescription{};
       if (rebootPending) error = "Update already starting";
-      else if (!availableBuild || !validUpdateJob(availableUpdate)) error = "No eligible update; check for updates first";
+      else if (!availableBuild || !verifySignedUpdate(availableUpdate, max(uint32_t(LUXIO_BUILD), prefs.getUInt("ota-floor", 0)), state.config.channel)) error = "No eligible update; check for updates first";
       else if (!loader || loader->address != 0x10000 || loader->size != LUXIO_LOADER_SIZE || !running || running->address != LUXIO_APP_ADDRESS || running->size != LUXIO_APP_SIZE) error = "Recovery layout required; install via USB first";
+      else if (esp_ota_get_partition_description(loader, &loaderDescription) != ESP_OK || strcmp(loaderDescription.project_name, "Recovery") || atoi(loaderDescription.version) < 31) error = "Signed recovery loader required; update via USB first";
       else {
         // Save the current controls before leaving the main application.
         auto persistent = std::make_unique<luxio_State>(state);
@@ -887,17 +889,19 @@ static void cloudTask(void *) {
       strlcpy(snapshot.name, state.config.name, sizeof(snapshot.name));
       snapshot.build = state.build; snapshot.channel = state.config.channel;
       xSemaphoreGive(stateMutex);
-      NetworkClientSecure tls; tls.setInsecure(); // Deliberately supported for deployments without a clock/trust store.
-      HTTPClient http; http.setTimeout(8000);
+      NetworkClient client;
+      HTTPClient http; http.setTimeout(8000); http.useHTTP10(true); http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
       String base = LUXIO_CLOUD_URL;
-      if (http.begin(tls, base + "/announcements/challenge")) {
+      if (http.begin(client, base + "/announcements/challenge")) {
         http.addHeader("Content-Type", "application/json");
         String body = String("{\"deviceId\":\"") + snapshot.device_id + "\"}";
         int status = http.POST(body);
-        if (status == 200) {
-          String body = http.getString(); http.end(); tls.stop();
-          cJSON *challenge = cJSON_Parse(body.c_str());
-          body = String();
+        if (status == 200 && http.getSize() > 0 && http.getSize() <= 128) {
+          char reply[129] = {};
+          size_t length = http.getSize();
+          bool complete = http.getStreamPtr()->readBytes(reply, length) == length;
+          http.end(); client.stop();
+          cJSON *challenge = complete ? cJSON_Parse(reply) : nullptr;
           auto nonceItem = cJSON_GetObjectItem(challenge, "nonce");
           String nonce = cJSON_IsString(nonceItem) ? nonceItem->valuestring : "";
           cJSON_Delete(challenge); http.end();
@@ -915,7 +919,7 @@ static void cloudTask(void *) {
             free(canonical); cJSON_Delete(payload);
             uint8_t base64[128]; size_t base64Length = 0;
             mbedtls_base64_encode(base64, sizeof(base64), &base64Length, signature, signatureLength); base64[base64Length] = 0;
-            if (!signedOk && http.begin(tls, base + "/announcements")) {
+            if (!signedOk && http.begin(client, base + "/announcements")) {
               cJSON *body = cJSON_CreateObject();
               cJSON_AddStringToObject(body, "deviceId", snapshot.device_id); cJSON_AddStringToObject(body, "publicKey", publicKey.c_str());
               cJSON_AddStringToObject(body, "nonce", nonce.c_str()); cJSON_AddStringToObject(body, "name", snapshot.name);
@@ -932,30 +936,27 @@ static void cloudTask(void *) {
     if (checkUpdate) {
       checkUpdate = false;
       xSemaphoreTake(stateMutex, portMAX_DELAY); auto channel = state.config.channel; xSemaphoreGive(stateMutex);
-      NetworkClientSecure tls; tls.setInsecure(); HTTPClient http; http.setTimeout(10000);
+      NetworkClient client; HTTPClient http; http.setTimeout(10000); http.useHTTP10(true); http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
       String url = String(LUXIO_CLOUD_URL) + "/updates?chip=" CONFIG_IDF_TARGET "&target=" + LUXIO_UPDATE_TARGET + "&build=" + LUXIO_BUILD + "&channel=" + channel;
       String failure; UpdateJob candidate;
-      if (http.begin(tls, url)) {
+      if (http.begin(client, url)) {
         int status = http.GET();
         if (status == 200) {
-          String body = http.getString(); http.end(); tls.stop();
-          cJSON *doc = cJSON_Parse(body.c_str());
-          body = String();
-          if (!doc) failure = "Invalid update response";
-          else if (!cJSON_IsNull(doc)) {
-            auto b = cJSON_GetObjectItem(doc, "build"), u = cJSON_GetObjectItem(doc, "url"), s = cJSON_GetObjectItem(doc, "sha256"), n = cJSON_GetObjectItem(doc, "size"), c = cJSON_GetObjectItem(doc, "channel"), chip = cJSON_GetObjectItem(doc, "chip"), target = cJSON_GetObjectItem(doc, "target");
-            if (!cJSON_IsNumber(b) || b->valuedouble != b->valueint || b->valueint <= LUXIO_BUILD || !cJSON_IsNumber(n) || n->valuedouble != n->valueint || n->valueint < 288 || n->valueint > LUXIO_APP_SIZE || !cJSON_IsNumber(c) || c->valuedouble != c->valueint || c->valueint > channel || c->valueint < 0 || !cJSON_IsString(chip) || strcmp(chip->valuestring, CONFIG_IDF_TARGET) || !cJSON_IsString(u) || strlen(u->valuestring) >= sizeof(candidate.url) || !cJSON_IsString(s) || strlen(s->valuestring) != 64 || !cJSON_IsString(target) || strcmp(target->valuestring, LUXIO_UPDATE_TARGET)) failure = "Invalid or incompatible update manifest";
-            else {
-              candidate.build = b->valueint; candidate.size = n->valueint;
-              strlcpy(candidate.url, u->valuestring, sizeof(candidate.url)); strlcpy(candidate.sha256, s->valuestring, sizeof(candidate.sha256)); strlcpy(candidate.target, target->valuestring, sizeof(candidate.target));
-              if (!validUpdateJob(candidate)) failure = "Invalid update manifest";
-            }
-          }
+          int length = http.getSize();
+          // Refuse oversized/chunked responses before allocating or parsing.
+          std::unique_ptr<char[]> body(length > 0 && length <= 6144 ? new (std::nothrow) char[length + 1] : nullptr);
+          bool complete = body && http.getStreamPtr()->readBytes(body.get(), length) == size_t(length);
+          if (body) body[length] = 0;
+          http.end(); client.stop();
+          cJSON *doc = complete ? parseUpdateJson(body.get(), length) : nullptr;
+          body.reset();
+          if (!doc) failure = "Invalid or oversized update response";
+          else if (!cJSON_IsNull(doc) && (!parseSignedUpdate(doc, candidate) ||
+              !verifySignedUpdate(candidate, max(uint32_t(LUXIO_BUILD), prefs.getUInt("ota-floor", 0)), channel)))
+            failure = "Invalid update signature, incompatible release or older build";
           cJSON_Delete(doc);
         } else if (status < 0) {
-          char detail[100] = {};
-          int tlsError = tls.lastError(detail, sizeof(detail));
-          failure = tlsError ? String("Update TLS error: ") + detail : String("Update connection failed: ") + HTTPClient::errorToString(status);
+          failure = String("Update connection failed: ") + HTTPClient::errorToString(status);
         } else failure = String("Update service returned ") + status;
         http.end();
       } else failure = "Unable to reach update service";
@@ -974,9 +975,8 @@ void setup() {
 #if ARDUINO_USB_CDC_ON_BOOT
   Serial0.begin(115200); // Also serve boards wired through an external USB/UART bridge.
 #endif
-  // Keep both large TLS buffers and small crypto allocations in PSRAM.
-  // Normal calloc still places small objects in internal RAM; a handshake
-  // can otherwise starve Wi-Fi even when Lua already uses PSRAM.
+  // Keep crypto allocations in PSRAM when available. Device cloud traffic
+  // uses signed HTTP and no longer allocates a TLS session.
   // Install once before identity, Wi-Fi and Matter initialize crypto.
   if (psramFound()) mbedtls_platform_set_calloc_free(
     [](size_t count, size_t size) -> void * { return ps_calloc(count, size); }, free);
@@ -1001,7 +1001,7 @@ void setup() {
   pixels = static_cast<uint8_t (*)[6]>(psramFound() ? ps_calloc(frameCapacity * 3, 6) : calloc(frameCapacity * 3, 6));
   if (!pixels) abort();
   transition = std::make_unique<OutputTransition>(pixels + frameCapacity, pixels + frameCapacity * 2, frameCapacity);
-  // Matter is optional at runtime: reserve PSRAM for TLS, rendering and controls.
+  // Matter is optional at runtime: reserve PSRAM for rendering and controls.
   state.matter_disabled = !LUXIO_MATTER || !psramFound() || ESP.getPsramSize() < 2 * 1024 * 1024 || ESP.getFreePsram() < 1024 * 1024;
 #if CONFIG_IDF_TARGET_ESP32
   // GPIO16/17 are PSRAM signals on original ESP32 modules. A configuration from
@@ -1075,6 +1075,7 @@ void setup() {
   // An offline device must not roll back merely because Matter is waiting for Wi-Fi.
   // No timer, boot path or Matter callback checks for or starts a new update.
   esp_ota_mark_app_valid_cancel_rollback();
+  if (prefs.getUInt("ota-floor", 0) < LUXIO_BUILD) prefs.putUInt("ota-floor", LUXIO_BUILD);
   prefs.remove("ota-job");
 }
 

@@ -64,4 +64,4 @@ try {
   }
   await writeFile('.sdk/memory-device-results.json', JSON.stringify(results, null, 2));
 }
-console.log('PASS: 30 HTTPS checks, 100 LEDs, active animation, concurrent HTTP and WebSocket polling/broadcasts');
+console.log('PASS: 30 signed-HTTP update checks, 100 LEDs, active animation, concurrent HTTP and WebSocket polling/broadcasts');

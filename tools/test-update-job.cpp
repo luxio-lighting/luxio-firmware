@@ -11,8 +11,9 @@
 #include <initializer_list>
 int main() {
   UpdateJob valid; valid.build = 7; valid.size = 2258000;
-  strcpy(valid.url, "https://firmware.example/luxio.bin");
+  strcpy(valid.url, "http://firmware.example/luxio.bin");
   memset(valid.sha256, 'a', 64); strcpy(valid.target, LUXIO_UPDATE_TARGET);
+  strcpy(valid.keyId, "test-release"); memset(valid.signature, 'a', 96);
   assert(validUpdateJob(valid));
   for (const char *target : {"esp32-recovery-v1", "esp32s3-recovery-v1", "esp32c3-recovery-v1", "esp32c5-recovery-v1", "esp32c6-recovery-v1"}) {
     auto other = valid; strcpy(other.target, target);
@@ -20,9 +21,9 @@ int main() {
   }
   auto bad = valid; bad.size = LUXIO_APP_SIZE+1; assert(!validUpdateJob(bad));
   bad = valid; bad.size = 0; assert(!validUpdateJob(bad));
-  bad = valid; bad.version = 2; assert(!validUpdateJob(bad));
+  bad = valid; bad.version = 1; assert(!validUpdateJob(bad));
   bad = valid; bad.build = 0xffffffff; assert(!validUpdateJob(bad));
-  bad = valid; strcpy(bad.url, "http://firmware.example/luxio.bin"); assert(!validUpdateJob(bad));
+  bad = valid; strcpy(bad.url, "https://firmware.example/luxio.bin"); assert(!validUpdateJob(bad));
   bad = valid; bad.url[12] = '\n'; assert(!validUpdateJob(bad));
   bad = valid; memset(bad.url, 'a', sizeof(bad.url)); assert(!validUpdateJob(bad));
   bad = valid; strcpy(bad.target, "ab-v1"); assert(!validUpdateJob(bad));

@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Fir
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=30 tools/build-firmware.sh all
+LUXIO_BUILD=32 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=30 tools/build-firmware.sh esp32
+LUXIO_BUILD=32 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -69,7 +69,7 @@ GLEDOPTO reports no usable PSRAM and retains data GPIO16 and relay GPIO18.
 | esp32c5 | RISC-V | 8 MB | 0x2000 | 0x210000 | 2 MiB | 5.625 MiB | 4 |
 | esp32c6 | RISC-V | 8 MB | 0x0 | 0x210000 | 2 MiB | 5.625 MiB | 4 |
 
-All profiles use DIO flash. C5/C6 need 8 MB for the full Matter application plus HTTPS recovery; their pinned-SDK applications alone exceed the old 2.5 MiB slot. C3 needs a larger recovery slot than ESP32/S3. Each layout is fixed for its `<chip>-recovery-v1` target. Future incompatible layout changes need a new target version and USB migration. The build stages independent source/partition copies under `build/<chip>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
+All profiles use DIO flash. C5/C6 need 8 MB for the full Matter application plus recovery; their pinned-SDK applications alone exceed the old 2.5 MiB slot. C3 needs a larger recovery slot than ESP32/S3. Each layout is fixed for its `<chip>-recovery-v1` target. Future incompatible layout changes need a new target version and USB migration. The build stages independent source/partition copies under `build/<chip>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
 
 The 256 KiB filesystem and 64 KiB core-dump partition occupy the final 320 KiB of each profile's minimum flash size. Larger physical flash chips can use these images; smaller ones are rejected by Setup. ESP32, S3 and C5 probe PSRAM at startup. S3 uses QSPI PSRAM (including the Lolin S3 Mini); OPI PSRAM is not enabled by this profile. Basic lighting and updates do not require PSRAM. All three LED frames are allocated for the configured strip length and grow when it increases; configuration is rejected if allocation fails. A smaller count releases the excess capacity on reboot. The exact LED capacity, Matter heap headroom, USB reset behavior and board wiring still require hardware qualification. Default pins are starting values, not automatic board identification.
 
@@ -83,7 +83,7 @@ Builds default to channel 100 in their manifests. Public channel 0 publication r
 
 The **Firmware** GitHub workflow now has explicit manual inputs for `build`, `publish` and `channel`. On `main`, selecting `publish=true` uploads all five successful build packages through the API into MongoDB, verifies the public downloads, and registers the releases. Set `UPDATE_PUBLISH_TOKEN` in repository Actions secrets to the API's configured token. Select channel `0` to make a build available to Setup; `100` is the default development channel. Use a new increasing build number for changed binaries; identical publication retries are safe. Pull requests never publish, and automatic tagged releases retain their qualification gate. Manual publication does not imply hardware qualification.
 
-For the same operation locally, run `LUXIO_CHANNEL=0 node tools/publish-update.mjs build/<chip>/release/manifest.local.json --upload` with `UPDATE_PUBLISH_TOKEN` set. The upload endpoint uses immutable SHA-256 URLs at `https://api.luxio.lighting/firmware/<sha256>`; no external binary host is needed. `LUXIO_API_URL` overrides the HTTPS API origin. All local files are validated before the first upload, and all downloads are validated before metadata registration.
+For the same operation locally, run `LUXIO_CHANNEL=0 node tools/publish-update.mjs build/<chip>/release/manifest.local.json --upload` with `UPDATE_PUBLISH_TOKEN` and `OTA_SIGNING_KEY` set. The upload endpoint uses immutable SHA-256 URLs at `https://api.luxio.lighting/firmware/<sha256>`; no external binary host is needed. `LUXIO_API_URL` overrides the HTTPS API origin. All local files are validated before the first upload, and all downloads are validated before metadata registration.
 
 ## Verification and protocol generation
 
@@ -234,18 +234,36 @@ send an explicit relay message with enabled=false.
 GLEDOPTO references: [current manufacturer product page and manual](https://www.gledopto.com/h-pd-91.html),
 [older GPIO12 manual](https://www.gledopto.eu/mediafiles/anleitungen/7002-gl-c-016wl-d-eng.pdf).
 
-## Response and TLS memory (build 30)
+## Response and update memory (build 32)
 
-Protobuf responses allocate their actual encoded size on HTTP, WebSocket, USB and
-BLE, retaining the 32 KiB protocol limit. The build reconstructs the pinned SDK's
-TLS record layer with 16 KiB receive and 4 KiB transmit buffers, saving 12 KiB per
-connection without changing SDK features or public layouts. Source archives are
-checksum-pinned and cached under `.sdk/tls`; the first build requires HTTPS access
-to GitHub. The installed Arduino SDK is unchanged. Dynamic TLS buffers remain off.
+Replies allocate their encoded size on demand across HTTP, WebSocket, USB and
+BLE, retaining the 32 KiB protocol limit. Device announcements, update checks
+and OTA downloads use HTTP. They do not allocate TLS handshake or record buffers.
+The build uses the SDK libraries directly again; the optional build-30 TLS
+experiment is no longer part of the firmware build.
 
-The opt-in concurrency test requires an already running animation and temporarily
-changes LED count to 100, then restores the count and current lighting selection:
+Release authentication uses ECDSA P-256/SHA-256. Both main and recovery embed
+`ota-public-key.json`'s public key and reject unsigned/tampered manifests. Recovery
+hashes the entire image while streaming and selects it for boot only after the
+signed hash matches. The image must also match chip, application name and build.
+Confirmed build numbers are persisted to reject OTA downgrades. HTTP metadata
+is visible and an attacker can suppress updates; signatures prevent substituting
+untrusted firmware, not denial of service.
+
+Existing devices need a one-time USB upgrade of both main and recovery; older
+loaders do not verify signatures. No eFuse settings are changed. USB provisioning
+remains a trusted operation. See [recovery-updates.md](docs/recovery-updates.md).
+
+The publisher signs using the `OTA_SIGNING_KEY` GitHub Actions secret and refuses
+a key that does not match the embedded trust anchor. Keep an offline backup of
+the signing key. It has no certificate expiration. Replacing this key requires
+upgrading the fixed recovery loader over USB; do not silently rotate it in CI.
+Browser Setup, uploads and publication retain HTTPS URLs and bearer credentials
+are never sent by the publisher over HTTP.
+
+An opt-in device test runs an animation at 100 LEDs while repeatedly checking for
+updates and polling HTTP/WebSocket controls:
 
 ```sh
-DEVICE_ADDRESS=192.0.2.10 EXPECTED_BUILD=30 node --import tsx tools/test-memory-device.ts
+DEVICE_ADDRESS=192.0.2.10 EXPECTED_BUILD=32 node --import tsx tools/test-memory-device.ts
 ```

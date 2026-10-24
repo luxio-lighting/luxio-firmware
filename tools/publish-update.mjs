@@ -1,3 +1,4 @@
+import { signUpdate } from './ota-signature.mjs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 const token = process.env.UPDATE_PUBLISH_TOKEN;
@@ -8,6 +9,8 @@ const base = (process.env.LUXIO_API_URL ?? 'https://api.luxio.lighting').replace
 if (!base.startsWith('https://')) throw new Error('An HTTPS API URL is required');
 if (process.env.LUXIO_CHANNEL !== undefined) manifest.channel = Number(process.env.LUXIO_CHANNEL);
 if (!Number.isInteger(manifest.channel ?? 100) || (manifest.channel ?? 100) < 0 || (manifest.channel ?? 100) > 100) throw new Error('Invalid publication channel');
+// Fail before any network operation if the release signer is missing or mismatched.
+signUpdate(manifest, process.env.OTA_SIGNING_KEY ?? '');
 const targets = JSON.parse(await readFile(new URL('../targets.json', import.meta.url), 'utf8'));
 const hardware = targets.find(target => target.chip === manifest.chip);
 if (!hardware || manifest.target !== `${manifest.chip}-recovery-v1`)

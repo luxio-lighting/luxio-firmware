@@ -12,7 +12,7 @@ root = Path(__file__).resolve().parent.parent
 matrix = json.loads((root / 'targets.json').read_text())
 chip = sys.argv[1] if len(sys.argv) > 1 else 'esp32s3'
 target = next(t for t in matrix if t['chip'] == chip)
-directory = root / 'build' / chip
+directory = root / os.environ.get('LUXIO_BUILD_ROOT', 'build') / chip
 app = directory / 'main/Luxio.ino.bin'
 loader = directory / 'recovery/Recovery.ino.bin'
 raw = app.read_bytes()
@@ -22,6 +22,8 @@ for path in [app, loader, directory / 'main/Luxio.ino.bootloader.bin', directory
     assert len(image) >= 24 and image[0] == 0xe9 and struct.unpack_from('<H', image, 12)[0] == target['imageChipId'], f'Wrong chip image: {path}'
 assert (directory / 'main/Luxio.ino.bootloader.bin').read_bytes() == (directory / 'recovery/Recovery.ino.bootloader.bin').read_bytes(), 'Bootloaders differ'
 build = int(raw[48:80].rstrip(b'\0'))
+recovery = loader.read_bytes()
+assert recovery[80:112].rstrip(b'\0') == b'Recovery' and recovery[48:80].rstrip(b'\0') == str(build).encode(), 'Recovery identity/build must match the application package'
 assert 0 < len(raw) <= target['applicationSize']
 assert 0 < loader.stat().st_size <= target['recoverySize']
 assert (directory/'main/Luxio.ino.partitions.bin').read_bytes() == (directory/'recovery/Recovery.ino.partitions.bin').read_bytes()

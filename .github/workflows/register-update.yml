@@ -22,4 +22,5 @@ jobs:
         run: curl --fail --proto '=https' "$MANIFEST_URL" -o firmware-manifest.json
       - run: node tools/publish-update.mjs firmware-manifest.json
         env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
           UPDATE_PUBLISH_TOKEN: ${{ secrets.UPDATE_PUBLISH_TOKEN }}

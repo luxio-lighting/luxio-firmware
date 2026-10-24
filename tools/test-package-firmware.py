@@ -28,6 +28,8 @@ with tempfile.TemporaryDirectory(prefix='package-test-', dir=root / '.sdk') as d
         struct.pack_into('<H', app, 12, target['imageChipId'])
         app[48:49] = b'1'
         app[80:85] = b'Luxio'
+        recovery = bytearray(app)
+        recovery[80:112] = b'Recovery'.ljust(32, b'\0')
         boot = app[:24] + bytes(40)
         valid = [(0, 0x10000, target['recoverySize'], b'loader'), (0x10, target['applicationAddress'], target['applicationSize'], b'app0')]
         for name, applications, wrong_image, succeeds in [
@@ -39,10 +41,14 @@ with tempfile.TemporaryDirectory(prefix='package-test-', dir=root / '.sdk') as d
             ('wrong application capacity', [valid[0], (0x10, 0x130000, 0x270000, b'app0')], None, False),
             ('foreign main image', valid, 'main/Luxio.ino.bin', False),
             ('foreign recovery image', valid, 'recovery/Recovery.ino.bin', False),
+            ('generic loader descriptor', valid, None, False),
+            ('mismatched loader build', valid, None, False),
             ('foreign bootloader', valid, 'main/Luxio.ino.bootloader.bin', False),
         ]:
-            for path, content in [('main/Luxio.ino.bin', app), ('main/Luxio.ino.bootloader.bin', boot), ('recovery/Recovery.ino.bootloader.bin', boot), ('recovery/Recovery.ino.bin', app)]:
+            for path, content in [('main/Luxio.ino.bin', app), ('main/Luxio.ino.bootloader.bin', boot), ('recovery/Recovery.ino.bootloader.bin', boot), ('recovery/Recovery.ino.bin', recovery)]:
                 data = bytearray(content)
+                if path == 'recovery/Recovery.ino.bin' and name == 'generic loader descriptor': data[80:112] = b'arduino-lib-builder'.ljust(32, b'\0')
+                if path == 'recovery/Recovery.ino.bin' and name == 'mismatched loader build': data[48:80] = b'2'.ljust(32, b'\0')
                 if path == wrong_image:
                     struct.pack_into('<H', data, 12, 99)
                 (build / path).write_bytes(data)

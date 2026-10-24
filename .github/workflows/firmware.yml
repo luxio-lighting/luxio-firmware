@@ -9,7 +9,7 @@ on:
         description: Firmware build number (increase for each new release)
         type: number
         required: true
-        default: 30
+        default: 32
       publish:
         description: Upload binaries to MongoDB through the API and register updates
         type: boolean
@@ -52,6 +52,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
       - run: tools/bootstrap-firmware.sh
+      - uses: actions/setup-node@v4
+        if: matrix.chip == 'esp32'
+        with:
+          node-version: 24
+      - name: Test signed OTA verifier for every chip
+        if: matrix.chip == 'esp32'
+        run: node tools/test-ota-signatures.mjs
       - name: Build firmware and enforce image identity, partition sizes and stack budgets
         env:
           LUXIO_BUILD: ${{ needs.matrix.outputs.build }}
@@ -81,6 +88,7 @@ jobs:
           path: packages
       - name: Upload, verify downloads and register each chip
         env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
           UPDATE_PUBLISH_TOKEN: ${{ secrets.UPDATE_PUBLISH_TOKEN }}
           LUXIO_CHANNEL: ${{ inputs.channel }}
           RUN_NUMBER: ${{ github.run_number }}

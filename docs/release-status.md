@@ -264,3 +264,50 @@ announcements to HTTP, retaining independently authenticated HTTPS in recovery.
 The current production API redirects HTTP to HTTPS and needs device-route
 exceptions managed by the server owner. TLS pinning and signed OTA transport
 alternatives were discussed but have not been implemented.
+
+## Build 32 signed HTTP candidate (2026-10-25)
+
+Device announcements, update checks and recovery downloads now use HTTP.
+Announcements retain their challenge/device signatures. Releases carry an ECDSA
+P-256/SHA-256 signature over chip, layout, build, channel, size and application
+hash. Both main and recovery verify it; recovery also hashes the streamed image
+before selecting it to boot. Persisted confirmed builds reject OTA downgrades.
+The manual recovery endpoint requires the same signed manifest. Update-response
+size and nesting are bounded; URLs are derived from the compiled API origin and
+signed digest. Browser Setup and publisher traffic remain HTTPS.
+
+The API changes are committed as `2c57cac` and the server owner confirmed deployment.
+The release public key is embedded in both programs; its private key is held in
+the firmware repository's encrypted Actions secret. Existing devices require a
+one-time USB upgrade of the fixed recovery loader. Job version 1 cannot bypass
+the new checks. Build 31 is reserved for local testing, not public publication.
+
+Host regression tests and API tests pass. The production MbedTLS verifier was
+exercised with Node signatures for all five chip names, including wrong key,
+wrong chip, changed metadata, wrong URL, missing signature and rollback cases.
+Physical qualification and final matrix sizes are recorded below when complete.
+
+Final build 32 packages:
+
+| Chip | Application bytes | Recovery bytes |
+| --- | ---: | ---: |
+| ESP32 | 2,101,984 | 1,029,584 |
+| ESP32-S3 | 2,235,360 | 1,014,736 |
+| ESP32-C3 | 2,282,656 | 1,085,040 |
+| ESP32-C5 | 3,012,784 | 1,143,696 |
+| ESP32-C6 | 2,983,152 | 1,091,088 |
+
+The physical GLEDOPTO passed the signed-HTTP recovery harness from local test
+build 31 to production application build 32. It rejected altered update-check
+metadata, unsigned/tampered/manual rollback manifests and deeply nested JSON.
+A truncated transfer stayed in recovery; a corrupt transfer failed its signed
+hash check; a reset during a third transfer resumed the persisted job and booted
+only the fourth, valid download. Identity, settings and saved scripts survived.
+The full install/retry sequence took 68.2 seconds. The first test correctly
+refused the SDK's generic loader descriptor; recovery now declares its own name
+and build, with a packaging regression test for that exact failure.
+
+Main/recovery package checks and compiler stack budgets pass on all five chips.
+Cloud stack frames are 1,504 bytes (Xtensa) / 1,520 bytes (RISC-V), below the
+3,072-byte cap. Other board families remain compile-qualified only. Matter and
+original-ESP32 BLE eligibility are unchanged; visual output is not user-confirmed.

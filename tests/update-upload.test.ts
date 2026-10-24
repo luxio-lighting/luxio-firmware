@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -11,6 +11,11 @@ for (const hardware of targets) {
   test(`MongoDB publisher validates and uploads ${hardware.chip}`, async () => {
     await mkdir('.sdk', { recursive: true });
     const directory = await mkdtemp(resolve('.sdk/upload-test-'));
+    const keys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    await mkdir(resolve(directory, 'tools'));
+    for (const file of ['publish-update.mjs', 'ota-signature.mjs']) await writeFile(resolve(directory, 'tools', file), await readFile(resolve('tools', file)));
+    await writeFile(resolve(directory, 'targets.json'), JSON.stringify(targets));
+    await writeFile(resolve(directory, 'ota-public-key.json'), JSON.stringify({ keyId: 'test-release', pem: keys.publicKey.export({ format: 'pem', type: 'spki' }).toString() }));
     try {
       for (const scenario of ['valid', 'retry', 'wrong chip', 'bad checksum', 'upload failed', 'download failed']) {
         const parts = [];
@@ -30,6 +35,9 @@ for (const hardware of targets) {
         await writeFile(path, JSON.stringify(manifest));
         const result = spawnSync(process.execPath, ['--input-type=module', '--eval', `
           import assert from 'node:assert/strict';
+          const { verify } = await import('node:crypto');
+          const { otaPayload } = await import(${JSON.stringify(pathToFileURL(resolve(directory, 'tools/ota-signature.mjs')).href)});
+          const publicKey = ${JSON.stringify(keys.publicKey.export({ format: 'pem', type: 'spki' }).toString())};
           process.argv[2] = ${JSON.stringify(path)};
           process.argv[3] = '--upload';
           const scenario = ${JSON.stringify(scenario)};
@@ -44,7 +52,7 @@ for (const hardware of targets) {
               return new Response('{}', { status: scenario === 'retry' ? 200 : 201 });
             }
             if (options?.method === 'POST') {
-              posts++;
+              posts++; if (!verify('sha256', otaPayload(JSON.parse(options.body)), publicKey, Buffer.from(JSON.parse(options.body).signature, 'base64'))) throw new Error('Bad publication signature');
               assert.equal(gets, 6);
               const payload = JSON.parse(options.body);
               assert.equal(payload.channel, 0);
@@ -62,7 +70,7 @@ for (const hardware of targets) {
             return new Response(stored.get(url));
           };
           try {
-            await import(${JSON.stringify(pathToFileURL(resolve('tools/publish-update.mjs')).href)});
+            await import(${JSON.stringify(pathToFileURL(resolve(directory, 'tools/publish-update.mjs')).href)});
             assert.ok(['valid', 'retry'].includes(scenario));
             assert.equal(posts, 1);
             assert.equal(puts, ${new Set(parts.map(part => part.sha256)).size});
@@ -71,7 +79,7 @@ for (const hardware of targets) {
             if (['wrong chip', 'bad checksum'].includes(scenario)) assert.equal(puts, 0, 'Invalid local package reached upload');
             throw error;
           }
-        `], { encoding: 'utf8', env: { ...process.env, UPDATE_PUBLISH_TOKEN: 'test-only-token-with-at-least-32-characters', LUXIO_CHANNEL: '0' } });
+        `], { encoding: 'utf8', env: { ...process.env, OTA_SIGNING_KEY: keys.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), UPDATE_PUBLISH_TOKEN: 'test-only-token-with-at-least-32-characters', LUXIO_CHANNEL: '0' } });
         if (['valid', 'retry'].includes(scenario)) assert.equal(result.status, 0, result.stderr);
         else { assert.notEqual(result.status, 0, scenario); assert.doesNotMatch(result.stderr, /Invalid release reached registration|Invalid local package reached upload/); }
       }

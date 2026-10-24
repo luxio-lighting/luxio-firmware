@@ -4,13 +4,13 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
-#include <NetworkClientSecure.h>
+#include <NetworkClient.h>
 #include <esp_ota_ops.h>
 #include <esp_app_format.h>
 #include <esp_image_format.h>
 #include <mbedtls/sha256.h>
 #include <cJSON.h>
-#include "update_job.h"
+#include "signed_update.h"
 
 static Preferences prefs;
 static WebServer server(80);
@@ -30,19 +30,19 @@ void setup() {
   if (!running || running->address != 0x10000 || running->size != LUXIO_LOADER_SIZE || running->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY || !application || application->address != LUXIO_APP_ADDRESS || application->size != LUXIO_APP_SIZE) abort();
   bool pending = prefs.isKey("ota-job");
   if (pending && prefs.getBytesLength("ota-job") == sizeof(job)) prefs.getBytes("ota-job", &job, sizeof(job));
-  if (pending && !validUpdateJob(job)) failure = "Saved update request is invalid. Submit a new update.";
+  if (pending && !verifySignedUpdate(job, max(uint32_t(LUXIO_BUILD - 1), prefs.getUInt("ota-floor", 0)))) failure = "Saved update request is invalid. Submit a new update.";
   // A fresh USB installation boots the loader once, then the verified app.
   // Never boot a partial application while an update request is outstanding.
   esp_ota_img_states_t previousState;
   bool failedBoot = esp_ota_get_state_partition(application, &previousState) == ESP_OK && (previousState == ESP_OTA_IMG_ABORTED || previousState == ESP_OTA_IMG_INVALID);
   if (!pending && !failedBoot && esp_ota_set_boot_partition(application) == ESP_OK) ESP.restart();
-  queued = pending && validUpdateJob(job) && !failedBoot;
+  queued = pending && verifySignedUpdate(job, max(uint32_t(LUXIO_BUILD - 1), prefs.getUInt("ota-floor", 0))) && !failedBoot;
   if (failedBoot) failure = "The new firmware did not start. Retry or submit another update.";
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true);
   String ssid = prefs.getString("ssid"), password = prefs.getString("password");
   if (ssid.length()) WiFi.begin(ssid.c_str(), password.c_str());
   server.on("/", HTTP_GET, [] {
-    server.send(200, "text/html", R"HTML(<!doctype html><meta name="viewport" content="width=device-width"><title>Luxio recovery</title><style>body{font:17px system-ui;background:#211b20;color:white;max-width:560px;margin:40px auto;padding:20px}button,input{font:inherit;padding:12px;margin:8px 0;box-sizing:border-box;width:100%}pre{white-space:pre-wrap}</style><h1>Luxio recovery</h1><p>Your light is offline while its firmware updates. Keep it powered on.</p><pre id="state"></pre><button id="retry">Retry update</button><details><summary>Use another firmware update</summary><form id="update"><input name="url" placeholder="Firmware HTTPS URL" required><input name="sha256" placeholder="SHA-256" required><input name="size" type="number" placeholder="Size in bytes" required><input name="build" type="number" placeholder="Build" required><button>Install firmware</button></form></details><script>async function refresh(){try{let s=await(await fetch('/status')).json();document.getElementById('state').textContent=s.status+'\n'+s.received+' / '+s.size+' bytes\n'+s.error;document.getElementById('retry').disabled=s.busy}catch{document.getElementById('state').textContent='Reconnecting…'}}document.getElementById('retry').onclick=async()=>{let r=await fetch('/retry',{method:'POST'});if(!r.ok)alert(await r.text());refresh()};document.getElementById('update').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));d.size=Number(d.size);d.build=Number(d.build);d.target=(await(await fetch('/status')).json()).target;let r=await fetch('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok)alert(await r.text());refresh()};refresh();setInterval(refresh,1500)</script>)HTML");
+    server.send(200, "text/html", R"HTML(<!doctype html><meta name="viewport" content="width=device-width"><title>Luxio recovery</title><style>body{font:17px system-ui;background:#211b20;color:white;max-width:560px;margin:40px auto;padding:20px}button,input,textarea{font:inherit;padding:12px;margin:8px 0;box-sizing:border-box;width:100%}pre{white-space:pre-wrap}</style><h1>Luxio recovery</h1><p>Your light is offline while its firmware updates. Keep it powered on.</p><pre id="state"></pre><button id="retry">Retry update</button><details><summary>Use another firmware update</summary><form id="update"><textarea name="manifest" rows="10" placeholder="Paste signed release manifest JSON" required></textarea><button>Install firmware</button></form></details><script>async function refresh(){try{let s=await(await fetch('/status')).json();document.getElementById('state').textContent=s.status+'\n'+s.received+' / '+s.size+' bytes\n'+s.error;document.getElementById('retry').disabled=s.busy}catch{document.getElementById('state').textContent='Reconnecting…'}}document.getElementById('retry').onclick=async()=>{let r=await fetch('/retry',{method:'POST'});if(!r.ok)alert(await r.text());refresh()};document.getElementById('update').onsubmit=async e=>{e.preventDefault();let d;try{d=JSON.parse(new FormData(e.target).get('manifest'))}catch{alert('Invalid manifest JSON');return;}let r=await fetch('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok)alert(await r.text());refresh()};refresh();setInterval(refresh,1500)</script>)HTML");
   });
   server.on("/status", HTTP_GET, [] {
     xSemaphoreTake(mutex, portMAX_DELAY);
@@ -55,17 +55,15 @@ void setup() {
   });
   server.on("/retry", HTTP_POST, [] {
     xSemaphoreTake(mutex, portMAX_DELAY);
-    bool valid = !busy && !queued && validUpdateJob(job);
+    bool valid = !busy && !queued && verifySignedUpdate(job, max(uint32_t(LUXIO_BUILD - 1), prefs.getUInt("ota-floor", 0)));
     if (valid) { queued = true; failure = ""; }
     xSemaphoreGive(mutex);
     server.send(valid ? 202 : 409, "text/plain", valid ? "Retry requested" : "No failed update to retry");
   });
   server.on("/update", HTTP_POST, [] {
     String body = server.arg("plain"); UpdateJob replacement;
-    cJSON *doc = body.length() <= 2048 ? cJSON_Parse(body.c_str()) : nullptr;
-    auto url = cJSON_GetObjectItem(doc, "url"), sha = cJSON_GetObjectItem(doc, "sha256"), size = cJSON_GetObjectItem(doc, "size"), build = cJSON_GetObjectItem(doc, "build"), target = cJSON_GetObjectItem(doc, "target");
-    bool valid = cJSON_IsString(url) && strlen(url->valuestring) < sizeof(replacement.url) && cJSON_IsString(sha) && strlen(sha->valuestring) == 64 && cJSON_IsNumber(size) && size->valuedouble == size->valueint && size->valueint >= 288 && size->valueint <= LUXIO_APP_SIZE && cJSON_IsNumber(build) && build->valuedouble == build->valueint && build->valueint > 0 && cJSON_IsString(target) && !strcmp(target->valuestring, LUXIO_UPDATE_TARGET);
-    if (valid) { replacement.size = size->valueint; replacement.build = build->valueint; strlcpy(replacement.url, url->valuestring, sizeof(replacement.url)); strlcpy(replacement.sha256, sha->valuestring, sizeof(replacement.sha256)); strlcpy(replacement.target, target->valuestring, sizeof(replacement.target)); valid = validUpdateJob(replacement); }
+    cJSON *doc = parseUpdateJson(body.c_str(), body.length());
+    bool valid = parseSignedUpdate(doc, replacement) && verifySignedUpdate(replacement, max(uint32_t(LUXIO_BUILD - 1), prefs.getUInt("ota-floor", 0)));
     cJSON_Delete(doc);
     xSemaphoreTake(mutex, portMAX_DELAY);
     int code = !valid ? 400 : busy || queued ? 409 : 202;
@@ -87,13 +85,13 @@ void setup() {
       xSemaphoreGive(mutex);
       if (!start) { vTaskDelay(pdMS_TO_TICKS(250)); continue; }
       String error;
-      NetworkClientSecure tls; tls.setInsecure(); // Same trust policy as Luxio; SHA-256 is checked against the saved manifest.
+      NetworkClient client;
       HTTPClient http; http.setTimeout(10000); http.useHTTP10(true); http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
       esp_ota_handle_t handle = 0;
       bool opened = false, success = false;
       uint32_t total = 0;
-      if (!validUpdateJob(current)) error = "Invalid saved update";
-      else if (!http.begin(tls, current.url) || http.GET() != 200) error = "Firmware server unavailable. Retry when it is reachable.";
+      if (!verifySignedUpdate(current, max(uint32_t(LUXIO_BUILD - 1), prefs.getUInt("ota-floor", 0)))) error = "Invalid update signature or older build";
+      else if (!http.begin(client, current.url) || http.GET() != 200) error = "Firmware server unavailable. Retry when it is reachable.";
       else if (http.getSize() != int(current.size)) error = "Firmware length does not match the update request";
       else {
         auto *stream = http.getStreamPtr(); uint8_t buffer[2048];
