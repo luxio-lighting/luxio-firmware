@@ -4,8 +4,8 @@
 #endif
 #if CONFIG_IDF_TARGET_ESP32 && !LUXIO_MATTER
 // The original ESP32 SDK excludes CHIPoBLE and only bundles Bluedroid.
-// Keep this transport for diagnostic builds without Matter. The combined
-// stack exhausts RAM on the original ESP32 (the public target has no PSRAM).
+// Keep this transport for diagnostic builds without linked Matter. Runtime
+// Matter gating in the public build does not enable this BLE transport.
 #include <NimBLEDevice.h>
 #include <esp32-hal-bt.h>
 #include <esp_heap_caps.h>

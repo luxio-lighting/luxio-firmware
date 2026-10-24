@@ -84,6 +84,7 @@ message Gradient {
 }
 message SavedColor { string id = 1; string name = 2; Color color = 3; }
 message State {
+  bool matter_disabled = 17; // True when Matter is unavailable in this build or disabled by its RAM check; absent in older Matter-enabled firmware.
   uint32 animation_revision = 16; // Changes whenever an animation starts, including RAM-only replacements.
   repeated Color animation_preview = 15; // Active animation hint, including RAM-only animations.
   string device_id = 1;
@@ -135,6 +136,8 @@ message NetworkStatus {
   string ssid = 11;
   string gateway = 12;
   repeated string dns = 13;
+  uint32 psram_size = 14; // Successfully initialized external RAM, in bytes.
+  uint32 psram_free = 15;
 }
 message Response {
   uint32 id = 1;

@@ -9,7 +9,7 @@ on:
         description: Firmware build number (increase for each new release)
         type: number
         required: true
-        default: 27
+        default: 28
       publish:
         description: Upload binaries to MongoDB through the API and register updates
         type: boolean
@@ -55,7 +55,6 @@ jobs:
       - name: Build firmware and enforce image identity, partition sizes and stack budgets
         env:
           LUXIO_BUILD: ${{ needs.matrix.outputs.build }}
-          LUXIO_MATTER: '1'
         run: tools/build-firmware.sh '${{ matrix.chip }}'
       - uses: actions/upload-artifact@v4
         with:

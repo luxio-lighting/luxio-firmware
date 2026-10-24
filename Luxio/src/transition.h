@@ -6,15 +6,18 @@
 // Colors stay independent; brightness is applied before the output crossfade.
 struct OutputTransition {
   static constexpr uint32_t duration = 500;
-  uint8_t displayed[1024][6] = {};
-  uint8_t origin[1024][6] = {};
+  uint8_t (*displayed)[6];
+  uint8_t (*origin)[6];
+  uint32_t capacity;
+  OutputTransition(uint8_t (*displayed)[6], uint8_t (*origin)[6], uint32_t capacity)
+    : displayed(displayed), origin(origin), capacity(capacity) {}
   uint32_t started = 0;
   bool active = false;
   bool identifying = false;
   uint32_t identifyStarted = 0;
 
   void begin(uint32_t now) {
-    memcpy(origin, displayed, sizeof(origin));
+    memcpy(origin, displayed, capacity * 6);
     started = now;
     active = true;
   }

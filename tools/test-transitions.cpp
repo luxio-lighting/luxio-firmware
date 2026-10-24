@@ -3,7 +3,13 @@
 #include <cstdio>
 
 int main() {
-  OutputTransition fade;
+  uint8_t smallFrames[2][60][6] = {}, smallPixels[60][6] = {};
+  OutputTransition small(smallFrames[0], smallFrames[1], 60);
+  smallPixels[59][2] = 255; small.begin(0); small.render(smallPixels, 60, 256, 500);
+  assert(small.displayed[59][2] == 255); small.begin(600);
+  assert(small.origin[59][2] == 255);
+  uint8_t fadeFrames[2][1024][6] = {};
+  OutputTransition fade(fadeFrames[0], fadeFrames[1], 1024);
   uint8_t pixels[1024][6] = {};
   pixels[0][0] = 255;
   pixels[1023][4] = 255;
@@ -41,7 +47,8 @@ int main() {
   fade.begin(UINT32_MAX - 100); fade.render(pixels, 1024, 256, 399);
   assert(!fade.active && fade.displayed[0][2] == 255);
   // Identify must be visible while off, without changing the underlying frame.
-  OutputTransition identify;
+  uint8_t identifyFrames[2][1024][6] = {};
+  OutputTransition identify(identifyFrames[0], identifyFrames[1], 1024);
   identify.render(pixels, 1024, 0, 10000, true);
   assert(identify.displayed[0][0] == 0);
   int previousPulse = 0;

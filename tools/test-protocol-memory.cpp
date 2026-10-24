@@ -72,7 +72,7 @@ int main() {
   assert(pb_decode(&relayDecoder, luxio_Config_fields, &relayDecoded));
   assert(relayDecoded.has_relay && !relayDecoded.relay.enabled); // Explicit disable survives the wire.
   luxio_State state = luxio_State_init_zero;
-  state.build = 26;
+  state.build = 28; state.matter_disabled = true;
   strcpy(state.lan_ip, "192.0.2.5");
   luxio_Gradient gradient = luxio_Gradient_init_zero;
   memset(gradient.editor_metadata, 'x', 2048);
@@ -85,7 +85,7 @@ int main() {
   decoded = luxio_Response_init_zero;
   decoder = pb_istream_from_buffer(bytes, encoder.bytes_written);
   assert(pb_decode(&decoder, luxio_Response_fields, &decoded));
-  assert(decoded.state && decoded.state->build == 26 && !strcmp(decoded.state->lan_ip, state.lan_ip));
+  assert(decoded.state && decoded.state->build == 28 && decoded.state->matter_disabled && !strcmp(decoded.state->lan_ip, state.lan_ip));
   assert(decoded.gradient && !strcmp(decoded.gradient->editor_metadata, gradient.editor_metadata));
   pb_release(luxio_Response_fields, &decoded);
   assert(!decoded.state && !decoded.gradient);

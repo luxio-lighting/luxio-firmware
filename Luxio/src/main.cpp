@@ -63,7 +63,8 @@ static httpd_handle_t httpServer;
 static mbedtls_pk_context identity;
 static String publicKey;
 static String pairingCode, pairingQr;
-static uint8_t (*pixels)[6];
+static uint8_t (*pixels)[6]; // One allocation contains target, displayed and fade-origin frames.
+static uint32_t frameCapacity;
 static std::unique_ptr<OutputTransition> transition;
 static bool identifyActive = false;
 static rmt_data_t *symbols;
@@ -223,7 +224,7 @@ static String startAnimation(const luxio_Script &script) {
   luaInstructions = 100000; luaDeadline = millis() + 30;
   lua_sethook(L, luaHook, LUA_MASKCOUNT, 1000);
   transition->begin(millis());
-  animationStarted = millis(); memset(pixels, 0, 1024 * 6);
+  animationStarted = millis(); memset(pixels, 0, frameCapacity * 6);
   if (luaL_loadstring(L, source) != LUA_OK || lua_pcall(L, 0, 0, 0) != LUA_OK) {
     String error = lua_tostring(L, -1); stopAnimation(); return error;
   }
@@ -320,7 +321,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
   ScriptPage page{request->script_offset, &response->next_script_offset};
   ScriptPage gradientPage{request->gradient_offset, &response->next_gradient_offset};
   ScriptPage colorPage{request->color_offset, &response->next_color_offset};
-  if (!decoded) error = "Invalid Protobuf request";
+  if (!decoded) error = !strcmp(PB_GET_ERROR(&decoder), "realloc failed") ? "Not enough memory to decode request" : "Invalid Protobuf request";
   else if (request->operation == luxio_Operation_CREATE_SCRIPT || request->operation == luxio_Operation_UPDATE_SCRIPT ||
       request->operation == luxio_Operation_GET_SCRIPT || request->operation == luxio_Operation_RUN_SCRIPT) {
     responseScript.reset(new (std::nothrow) luxio_Script{});
@@ -376,6 +377,15 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
         if (!replacement) { error = "Not enough memory for this LED count"; break; }
         symbols = replacement; symbolCapacity = needed;
       }
+      if (c.led_count > frameCapacity) {
+        auto *replacement = static_cast<uint8_t (*)[6]>(psramFound() ? ps_calloc(c.led_count * 3, 6) : calloc(c.led_count * 3, 6));
+        if (!replacement) { error = "Not enough memory for this LED count"; break; }
+        memcpy(replacement, pixels, frameCapacity * 6);
+        memcpy(replacement + c.led_count, transition->displayed, frameCapacity * 6);
+        memcpy(replacement + c.led_count * 2, transition->origin, frameCapacity * 6);
+        free(pixels); pixels = replacement; frameCapacity = c.led_count;
+        transition->displayed = pixels + frameCapacity; transition->origin = pixels + frameCapacity * 2; transition->capacity = frameCapacity;
+      }
       if (activeRelayGpio >= 0 && (!c.relay.enabled || int(c.relay.gpio) != activeRelayGpio || c.relay.inverted != activeRelayInverted)) {
         digitalWrite(activeRelayGpio, activeRelayInverted ? HIGH : LOW);
         pinMode(activeRelayGpio, INPUT); activeRelayGpio = -1; relayPowered = false;
@@ -384,7 +394,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
         if (!rmtInit(c.gpio, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000)) { error = "Unable to initialize this GPIO"; break; }
         rmtDeinit(state.config.gpio);
       }
-      if (c.gpio != state.config.gpio || c.led_count != state.config.led_count || strcmp(c.strip_type, state.config.strip_type)) { stopAnimation(); state.color = {}; memset(pixels, 0, 1024 * 6); memset(transition->displayed, 0, sizeof(transition->displayed)); transition->active = false; }
+      if (c.gpio != state.config.gpio || c.led_count != state.config.led_count || strcmp(c.strip_type, state.config.strip_type)) { stopAnimation(); state.color = {}; memset(pixels, 0, frameCapacity * 6); memset(transition->displayed, 0, frameCapacity * 6); transition->active = false; }
       state.config = c; strlcpy(state.config.name, name.c_str(), sizeof(state.config.name)); dirty = true;
       MDNS.setInstanceName(state.config.name);
       MDNS.addServiceTxt("luxio", "tcp", "strip", (const char *)c.strip_type);
@@ -604,7 +614,8 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
       break;
     case luxio_Operation_STOP_SCRIPT: if (bool(request->script) && request->script->name[0] && strcmp(request->script->name, state.script_name)) break; if (state.mode == luxio_Mode_ANIMATION) { stopAnimation(); applyColor(); dirty = true; } break;
     case luxio_Operation_GET_PAIRING_CODE:
-      if (!pairingCode.length()) error = "Matter is not ready";
+      if (state.matter_disabled) error = "Matter is unavailable on this device";
+      else if (!pairingCode.length()) error = "Matter is not ready";
       else { strlcpy(response->pairing_code, pairingCode.c_str(), sizeof(response->pairing_code)); strlcpy(response->pairing_qr, pairingQr.c_str(), sizeof(response->pairing_qr)); }
       break;
     case luxio_Operation_CHECK_UPDATE:
@@ -666,6 +677,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
     wifi_ps_type_t powerSave = WIFI_PS_NONE;
     esp_wifi_get_ps(&powerSave); network.power_save = powerSave;
     network.uptime_ms = millis();
+    network.psram_size = ESP.getPsramSize(); network.psram_free = ESP.getFreePsram();
     network.internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     network.internal_largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     network.disconnect_count = wifiDisconnectCount.load(); network.last_disconnect_reason = wifiDisconnectReason.load();
@@ -856,10 +868,6 @@ void setup() {
   // Install once before identity, Wi-Fi and Matter initialize crypto.
   if (psramFound()) mbedtls_platform_set_calloc_free(
     [](size_t count, size_t size) -> void * { return ps_calloc(count, size); }, free);
-  // ESP32 has a smaller statically addressable DRAM region than its total heap.
-  transition = std::make_unique<OutputTransition>();
-  pixels = static_cast<uint8_t (*)[6]>(psramFound() ? ps_calloc(1024, 6) : calloc(1024, 6));
-  if (!pixels) abort();
   stateMutex = xSemaphoreCreateMutex();
   prefs.begin("luxio", false);
   state.build = LUXIO_BUILD; state.has_config = true; state.has_color = true;
@@ -876,6 +884,19 @@ void setup() {
     state.build = LUXIO_BUILD; state.active_script_id[0] = 0;
     if (state.mode != luxio_Mode_GRADIENT || !state.has_gradient || !validGradient(state.gradient, state.config.strip_type)) { state.mode = luxio_Mode_COLOR; state.has_gradient = false; state.active_gradient_id[0] = 0; }
   }
+  // Size all three frames for this strip rather than reserving 18 KiB for 1024 LEDs.
+  frameCapacity = state.config.led_count;
+  pixels = static_cast<uint8_t (*)[6]>(psramFound() ? ps_calloc(frameCapacity * 3, 6) : calloc(frameCapacity * 3, 6));
+  if (!pixels) abort();
+  transition = std::make_unique<OutputTransition>(pixels + frameCapacity, pixels + frameCapacity * 2, frameCapacity);
+  // Matter is optional at runtime: reserve PSRAM for TLS, rendering and controls.
+  state.matter_disabled = !LUXIO_MATTER || !psramFound() || ESP.getPsramSize() < 2 * 1024 * 1024 || ESP.getFreePsram() < 1024 * 1024;
+#if CONFIG_IDF_TARGET_ESP32
+  // GPIO16/17 are PSRAM signals on original ESP32 modules. A configuration from
+  // an older image with PSRAM disabled must not drive those pins after detection.
+  if (psramFound() && (state.config.gpio == 16 || state.config.gpio == 17)) state.config.gpio = 4;
+  if (psramFound() && state.config.has_relay && (state.config.relay.gpio == 16 || state.config.relay.gpio == 17)) state.config.relay.enabled = false;
+#endif
   state.animation_preview_count = 0; memset(state.animation_preview, 0, sizeof(state.animation_preview));
   state.parameters_count = 0; memset(state.parameters, 0, sizeof(state.parameters));
   mbedtls_pk_init(&identity);
@@ -925,6 +946,7 @@ void setup() {
   api.method = HTTP_OPTIONS; httpd_register_uri_handler(httpServer, &api);
   httpd_uri_t websocket = {}; websocket.uri = "/api/ws"; websocket.method = HTTP_GET; websocket.handler = websocketHandler; websocket.is_websocket = true; httpd_register_uri_handler(httpServer, &websocket);
 #if LUXIO_MATTER
+  if (!state.matter_disabled) {
   if (!matterLight.begin(state.on, {0, 0, 254}, constrain((state.brightness * 254 + 128) / 256, 1, 254), 370)) abort();
   matterLight.onIdentify([](bool enabled) {
     xSemaphoreTake(stateMutex, portMAX_DELAY);
@@ -968,6 +990,7 @@ void setup() {
     chip::MutableCharSpan manualSpan(manual), qrSpan(qr);
     GetManualPairingCode(manualSpan, payload); GetQRCode(qrSpan, payload);
     pairingCode = manual; pairingQr = qr;
+  }
   }
 #endif
   startBluetooth();

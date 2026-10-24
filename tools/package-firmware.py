@@ -62,4 +62,4 @@ if base:
     hosted['url'] = f"{base.rstrip('/')}/{chip}/luxio.bin"
     hosted['parts'] = [{**{key: value for key, value in part.items() if key != 'file'}, 'url': f"{base.rstrip('/')}/{chip}/{part['file']}"} for part in parts]
     (output / 'manifest.json').write_text(json.dumps(hosted, indent=2) + '\n')
-print(f'Build {build}: Matter app {len(raw):,} / {target["applicationSize"]:,}; recovery {loader.stat().st_size:,} / {target["recoverySize"]:,} bytes')
+print(f'Build {build}: application {len(raw):,} / {target["applicationSize"]:,}; recovery {loader.stat().st_size:,} / {target["recoverySize"]:,} bytes')

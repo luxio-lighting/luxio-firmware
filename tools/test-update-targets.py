@@ -10,6 +10,8 @@ os.chdir(root)
 (root / '.sdk').mkdir(exist_ok=True)
 for target in json.loads((root / 'targets.json').read_text()):
     chip = target['chip']
+    if chip in ['esp32', 'esp32s3', 'esp32c5']:
+        assert 'PSRAM=enabled' in target['fqbn'], 'Probe usable PSRAM before deciding Matter support'
     binary = root / '.sdk' / f'test-update-job-{chip}'
     subprocess.run(['c++', '-std=c++17', '-fsanitize=address,undefined',
                     f'-DCONFIG_IDF_TARGET="{chip}"',

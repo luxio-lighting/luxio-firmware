@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Fir
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=23 tools/build-firmware.sh all
+LUXIO_BUILD=28 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=23 tools/build-firmware.sh esp32
+LUXIO_BUILD=28 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -21,7 +21,7 @@ The existing ESP32/S3 layout remains:
 | NVS | `0x9000` | 20 KiB |
 | OTA boot selection | `0xe000` | 8 KiB |
 | Factory recovery loader | `0x10000` | 1.125 MiB |
-| Matter application | `0x130000` | 2.5 MiB |
+| Main application | `0x130000` | 2.5 MiB |
 | Library filesystem | `0x3b0000` | 256 KiB |
 | Core dumps | `0x3f0000` | 64 KiB |
 
@@ -31,6 +31,27 @@ The recovery web page is at the device's LAN IP while updating, with `/status`, 
 
 Matter uses Wi-Fi/IP; on S3/C3/C5/C6, Luxio exclusively owns Bluetooth for discovery, setup and control. The original ESP32 uses USB/Wi-Fi controls because the combined BLE/Matter stack exhausts its RAM. Physical qualification of the combined build and Matter conformance remain pending. See [release status](docs/release-status.md).
 
+
+## Matter memory policy (build 28)
+
+All public target binaries include Matter, but startup enables it only when usable
+PSRAM is detected with at least 2 MiB total and 1 MiB free after the LED frames are
+allocated. This is a conservative Luxio policy, not a universal Matter hardware
+minimum. It is based on detected memory, not the CPU architecture or chip family.
+The decision is made at boot; changing the LED count does not start or stop Matter
+until the next boot. Boards without usable PSRAM retain Luxio controls and updates.
+Skipping initialization saves runtime allocations but cannot reclaim Matter's
+linked static RAM. Physical Matter qualification with this policy remains pending.
+
+`State.matter_disabled` reports that decision. Updated mobile clients hide Matter
+settings when true; its absent/false value preserves compatibility with older
+firmware. `GET_PAIRING_CODE` returns an unavailable error when disabled.
+`NetworkStatus.psram_size` and `psram_free` report detected total/free bytes.
+
+Original ESP32 modules with detected PSRAM reserve GPIO16/17 for that RAM. On those
+modules only, a saved/default data pin of 16 or 17 is moved to GPIO4 and a relay on
+16/17 is disabled. Check the board wiring before enabling output. The tested
+GLEDOPTO reports no usable PSRAM and retains data GPIO16 and relay GPIO18.
 
 ## Target matrix
 
@@ -46,7 +67,7 @@ Matter uses Wi-Fi/IP; on S3/C3/C5/C6, Luxio exclusively owns Bluetooth for disco
 
 All profiles use DIO flash. C5/C6 need 8 MB for the full Matter application plus HTTPS recovery; their pinned-SDK applications alone exceed the old 2.5 MiB slot. C3 needs a larger recovery slot than ESP32/S3. Each layout is fixed for its `<chip>-recovery-v1` target. Future incompatible layout changes need a new target version and USB migration. The build stages independent source/partition copies under `build/<chip>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
 
-The 256 KiB filesystem and 64 KiB core-dump partition occupy the final 320 KiB of each profile's minimum flash size. Larger physical flash chips can use these images; smaller ones are rejected by Setup. S3 optionally initializes QSPI PSRAM (including the Lolin S3 Mini); OPI PSRAM is not enabled by this profile. Other targets do not require PSRAM. LED buffers grow with the configured strip length; configuration is rejected if RAM is insufficient. The exact LED capacity, Matter heap headroom, USB reset behavior and board wiring still require hardware qualification. Default pins are starting values, not automatic board identification.
+The 256 KiB filesystem and 64 KiB core-dump partition occupy the final 320 KiB of each profile's minimum flash size. Larger physical flash chips can use these images; smaller ones are rejected by Setup. ESP32, S3 and C5 probe PSRAM at startup. S3 uses QSPI PSRAM (including the Lolin S3 Mini); OPI PSRAM is not enabled by this profile. Basic lighting and updates do not require PSRAM. All three LED frames are allocated for the configured strip length and grow when it increases; configuration is rejected if allocation fails. A smaller count releases the excess capacity on reboot. The exact LED capacity, Matter heap headroom, USB reset behavior and board wiring still require hardware qualification. Default pins are starting values, not automatic board identification.
 
 ESP32 uses UART0 through an external USB bridge. S3/C3/C5/C6 serve both native USB Serial/JTAG and UART0; requests and replies stay on the same transport.
 
@@ -135,8 +156,8 @@ connect the light to Wi-Fi before adding it to a Matter controller. No Matter
 BLE service is advertised. Existing fabrics and Wi-Fi credentials are preserved.
 
 The pinned Arduino 3.3.3 SDK provides NimBLE on S3/C3/C5/C6. Original ESP32
-already has CHIPoBLE disabled. Its public Matter build keeps Luxio BLE disabled:
-the no-PSRAM target exhausted RAM during physical startup testing. USB and Wi-Fi
+already has CHIPoBLE disabled. Its public build keeps Luxio BLE disabled even when Matter is skipped at runtime:
+the combined stack exhausted RAM on the tested no-PSRAM controller. USB and Wi-Fi
 controls remain available. Diagnostic builds with `LUXIO_MATTER=0` use
 `bluetooth_esp32.cpp` and NimBLE-Arduino 2.5.1, installed by
 `tools/bootstrap-firmware.sh`, with one peripheral connection. The explicit

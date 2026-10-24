@@ -119,3 +119,38 @@ then set to inversion off and power on; the user confirmed that it now works as
 expected. The final tested device configuration is data GPIO16, relay GPIO18,
 inversion off. The release default remains relay disabled. Saved system/NVS and storage partitions were backed up
 and checked against device MD5 before the diagnostic; they were not overwritten.
+
+## Build 28 runtime Matter policy and low-memory fixes (2026-10-24)
+
+Matter remains compiled into every public target. Startup skips its initialization
+unless PSRAM probing finds at least 2 MiB total and 1 MiB free after LED frame
+allocation. ESP32/S3/C5 enable probing; the S3 profile still supports QSPI, not OPI.
+This threshold is Luxio policy, not a Matter specification requirement. Static
+Matter allocations remain linked. Original ESP32 Luxio BLE remains disabled.
+The state protocol exposes `matter_disabled`; network diagnostics expose PSRAM
+total/free bytes. Updated iOS and Android clients hide unavailable Matter settings.
+Older firmware omits the flag and retains its existing mobile controls.
+
+Three LED frames now allocate 18 bytes per configured LED instead of always
+reserving 18 KiB. Growing the count allocates replacement frames before releasing
+the existing allocation; failure keeps the old frames. Shrinking retains capacity
+until reboot. Nanopb allocation failures report insufficient memory instead of
+misreporting a valid request as malformed Protobuf.
+
+The GL-C-016WL-D reported no usable PSRAM in an independent probe with PSRAM enabled.
+Build 27 reproduced both errors: valid gradients with 1000/1500/2048-byte metadata
+failed decoding, and HTTPS update checking failed TLS allocation. Runtime Matter
+gating alone fixed gradients but left insufficient memory for TLS RSA processing.
+Sizing LED frames for this device's 60 LEDs recovered the additional memory needed.
+The final build 28 measured 56,056 bytes free internal RAM and a 51,188-byte largest
+block during a state request (build 27: 6,020 and 2,932 bytes).
+
+Physical validation passed three rounds of real iOS gradient fixtures and all
+previously failing metadata sizes, each followed by a successful HTTPS update check.
+Changing the LED count 60 → 61 → 60 also passed. Identity, Wi-Fi and data/relay
+configuration were preserved, and the original lighting state was restored.
+The ESP32 application is 2,166,832 bytes; recovery is 1,117,152 bytes. Image and stack
+checks, TypeScript checks and all host/native tests pass. iOS protocol tests and the
+signed phone build pass; the app is installed and launched on the user's iPhone.
+Android unit tests and the debug APK build pass. Other boards, the positive Matter
+startup path and large-strip TLS headroom still require physical qualification.
