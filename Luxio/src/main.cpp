@@ -13,6 +13,7 @@
 #include "gradient.h"
 #include "gradient_storage.h"
 #include "color_storage.h"
+#include "control_error.h"
 #include <memory>
 #include <atomic>
 #include <esp_heap_caps.h>
@@ -281,8 +282,9 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
   xSemaphoreTake(stateMutex, portMAX_DELAY);
   auto *request = new (std::nothrow) luxio_Request{};
   auto *response = new (std::nothrow) luxio_Response{};
-  if (!request || !response) { delete request; delete response; xSemaphoreGive(stateMutex); return 0; }
+  if (!request || !response) { delete request; delete response; xSemaphoreGive(stateMutex); return encodeControlError(input, length, output, capacity); }
   std::unique_ptr<luxio_Script> responseScript;
+  std::unique_ptr<luxio_Gradient> responseGradient;
 
   auto decoder = pb_istream_from_buffer(input, length);
   bool decoded = pb_decode(&decoder, luxio_Request_fields, request);
@@ -296,6 +298,11 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
       request->operation == luxio_Operation_GET_SCRIPT || request->operation == luxio_Operation_RUN_SCRIPT) {
     responseScript.reset(new (std::nothrow) luxio_Script{});
     if (!responseScript) error = "Not enough memory for this animation operation";
+  }
+  if (decoded && (request->operation == luxio_Operation_CREATE_GRADIENT || request->operation == luxio_Operation_UPDATE_GRADIENT ||
+      request->operation == luxio_Operation_GET_GRADIENT || request->operation == luxio_Operation_RUN_GRADIENT)) {
+    responseGradient.reset(new (std::nothrow) luxio_Gradient{});
+    if (!responseGradient) error = "Not enough memory for this gradient operation";
   }
   if (decoded && !error.length()) switch (request->operation) {
     case luxio_Operation_GET_STATE: break;
@@ -356,17 +363,18 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
       }
       break;
     case luxio_Operation_SET_GRADIENT:
-      if (!request->has_gradient || !validGradient(request->gradient, state.config.strip_type)) { error = "Gradient requires 2–8 valid colors for this strip"; break; }
+      if (!request->gradient || !validGradient(*request->gradient, state.config.strip_type)) { error = "Gradient requires 2–8 valid colors for this strip"; break; }
       stopAnimation(); transition->begin(millis());
-      state.gradient = request->gradient; state.gradient.id[0] = 0; state.gradient.name[0] = 0;
+      state.gradient = *request->gradient; state.gradient.id[0] = 0; state.gradient.name[0] = 0;
       state.has_gradient = true; state.mode = luxio_Mode_GRADIENT; state.on = true;
       renderGradient(state.gradient, pixels, state.config.led_count); break;
     case luxio_Operation_LIST_GRADIENTS: response->gradients.funcs.encode = listGradients; response->gradients.arg = &gradientPage; break;
     case luxio_Operation_CREATE_GRADIENT:
     case luxio_Operation_UPDATE_GRADIENT: {
-      auto &gradient = request->gradient;
+      if (!request->gradient) { error = "Gradient requires a name and 2–8 valid colors for this strip"; break; }
+      auto &gradient = *request->gradient;
       String name = gradient.name; name.trim();
-      if (!request->has_gradient || !name.length() || !validGradient(gradient, state.config.strip_type)) { error = "Gradient requires a name and 2–8 valid colors for this strip"; break; }
+      if (!name.length() || !validGradient(gradient, state.config.strip_type)) { error = "Gradient requires a name and 2–8 valid colors for this strip"; break; }
       strlcpy(gradient.name, name.c_str(), sizeof(gradient.name));
       if (request->operation == luxio_Operation_CREATE_GRADIENT) {
         uint8_t uuid[16]; esp_fill_random(uuid, 16); uuid[6] = (uuid[6] & 15) | 64; uuid[8] = (uuid[8] & 63) | 128;
@@ -381,12 +389,12 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
       file.flush(); file.close();
       File verify = LittleFS.open("/gradients/pending", "r");
       written = written && verify && verify.size() == storedSize && verify.read(output, storedSize) == storedSize &&
-        decodeStoredGradient(output, storedSize, response->gradient) && !strcmp(gradient.id, response->gradient.id) &&
-        !strcmp(gradient.name, response->gradient.name) && !strcmp(gradient.editor_metadata, response->gradient.editor_metadata) &&
-        gradient.colors_count == response->gradient.colors_count && !memcmp(gradient.colors, response->gradient.colors, gradient.colors_count * sizeof(luxio_Color));
+        decodeStoredGradient(output, storedSize, *responseGradient) && !strcmp(gradient.id, responseGradient->id) &&
+        !strcmp(gradient.name, responseGradient->name) && !strcmp(gradient.editor_metadata, responseGradient->editor_metadata) &&
+        gradient.colors_count == responseGradient->colors_count && !memcmp(gradient.colors, responseGradient->colors, gradient.colors_count * sizeof(luxio_Color));
       verify.close();
       if (!written || !LittleFS.rename("/gradients/pending", path)) { LittleFS.remove("/gradients/pending"); error = "Unable to save gradient (storage full or write failed)"; break; }
-      response->has_gradient = true; response->gradient = gradient; break;
+      response->gradient = &gradient; break;
     }
     case luxio_Operation_GET_GRADIENT:
     case luxio_Operation_RUN_GRADIENT:
@@ -400,12 +408,12 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
         break;
       }
       File file = LittleFS.open(path, "r"); size_t size = file.size();
-      if (!size || size > GRADIENT_RECORD_MAX || file.read(output, size) != size || !decodeStoredGradient(output, size, response->gradient)) { error = "Invalid saved gradient"; break; }
-      if (request->operation == luxio_Operation_GET_GRADIENT) response->has_gradient = true;
+      if (!size || size > GRADIENT_RECORD_MAX || size > capacity || file.read(output, size) != size || !decodeStoredGradient(output, size, *responseGradient)) { error = "Invalid saved gradient"; break; }
+      if (request->operation == luxio_Operation_GET_GRADIENT) response->gradient = responseGradient.get();
       else {
-        if (!validGradient(response->gradient, state.config.strip_type)) { error = "Gradient contains channels unavailable on this strip"; break; }
+        if (!validGradient(*responseGradient, state.config.strip_type)) { error = "Gradient contains channels unavailable on this strip"; break; }
         stopAnimation(); transition->begin(millis());
-        state.gradient = response->gradient; state.has_gradient = true;
+        state.gradient = *responseGradient; state.has_gradient = true;
         strlcpy(state.active_gradient_id, request->gradient_id, sizeof(state.active_gradient_id));
         state.mode = luxio_Mode_GRADIENT; state.on = true; dirty = true;
         renderGradient(state.gradient, pixels, state.config.led_count);
@@ -616,7 +624,8 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
     network.disconnect_count = wifiDisconnectCount.load(); network.last_disconnect_reason = wifiDisconnectReason.load();
   }
   if (error.length()) strlcpy(response->error, error.c_str(), sizeof(response->error));
-  else { response->has_state = true; response->state = state; strlcpy(response->state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(response->state.lan_ip)); }
+  // Borrow the state under stateMutex instead of allocating another full copy.
+  else { response->state = &state; strlcpy(state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(state.lan_ip)); }
   auto encoder = pb_ostream_from_buffer(output, capacity);
   size_t size = pb_encode(&encoder, luxio_Response_fields, response) ? encoder.bytes_written : 0;
   if (!size) {
@@ -964,8 +973,11 @@ void loop() {
       const size_t capacity = (psramFound() || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= 65536) ? 32768 : 8192;
       std::unique_ptr<uint8_t[]> output(new (std::nothrow) uint8_t[capacity]);
       size_t length = output ? dispatch(input.get(), received, output.get(), capacity) : 0;
+      uint8_t fallback[48];
+      const uint8_t *payload = output.get();
+      if (!length) { length = encodeControlError(input.get(), received, fallback, sizeof(fallback)); payload = fallback; }
       uint8_t prefix[8] = {0x4c, 0x58, 0x50, 0x31, uint8_t(length >> 24), uint8_t(length >> 16), uint8_t(length >> 8), uint8_t(length)};
-      controlPort->write(prefix, 8); if (length) controlPort->write(output.get(), length);
+      controlPort->write(prefix, 8); controlPort->write(payload, length);
       input.reset();
       received = 0; expected = 0; header = 0;
     }
@@ -1053,12 +1065,15 @@ void loop() {
     if (!subscribed) { delay(1); return; }
     auto *event = new (std::nothrow) luxio_Response{};
     if (!event) { delay(1); return; }
-    xSemaphoreTake(stateMutex, portMAX_DELAY); event->has_state = true; event->state = state; xSemaphoreGive(stateMutex);
-    strlcpy(event->state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(event->state.lan_ip));
     std::unique_ptr<uint8_t[]> bytes(new (std::nothrow) uint8_t[8192]);
     if (!bytes) { delete event; delay(1); return; }
     auto encoder = pb_ostream_from_buffer(bytes.get(), 8192);
-    if (pb_encode(&encoder, luxio_Response_fields, event)) {
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    event->state = &state;
+    strlcpy(state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(state.lan_ip));
+    const bool encoded = pb_encode(&encoder, luxio_Response_fields, event);
+    xSemaphoreGive(stateMutex);
+    if (encoded) {
       uint8_t digest[32]; mbedtls_sha256(bytes.get(), encoder.bytes_written, digest, 0);
       if (memcmp(digest, previousDigest, 32)) {
         memcpy(previousDigest, digest, 32);
