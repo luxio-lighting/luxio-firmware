@@ -1,16 +1,20 @@
 # Luxio firmware
 
-The ESP32-S3 build includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Firmware checks and installs are explicitly user-initiated. A reboot during an accepted download resumes that same request; it does not select a new release.
+The firmware matrix includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Firmware checks and installs are explicitly user-initiated. A reboot during an accepted download resumes that same request; it does not select a new release.
 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=22 LUXIO_MATTER=1 tools/build-firmware.sh
+LUXIO_BUILD=23 tools/build-firmware.sh all
+# Or build just one target:
+LUXIO_BUILD=23 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
 
-`build/release/manifest.local.json` lists exact USB flash parts and SHA-256 checksums. `luxio.bin` is the main application used for network updates. Both image capacities and the exact recovery/application partition layout are enforced. Recovery is the only supported update architecture. The package script deliberately omits Arduino's misleading single-sketch merged image.
+`build/<chip>/release/manifest.local.json` lists exact USB flash parts and SHA-256 checksums. `luxio.bin` is the main application used for network updates. Both image capacities and the target’s exact recovery/application partition layout are enforced. Recovery is the only supported update architecture. The package script deliberately omits Arduino's misleading single-sketch merged image.
+
+The existing ESP32/S3 layout remains:
 
 | Partition | Offset | Size |
 | --- | --- | --- |
@@ -23,9 +27,34 @@ The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it
 
 Initial installation requires USB flashing of the bootloader, partition table, erased OTA selection, recovery image and main image at the manifest offsets. Back up flash first. Do not erase all flash: NVS contains Wi-Fi credentials, identity and Matter state, and the filesystem contains saved colors, gradients, and animations. Normal network updates write only the main application; the loader is never replaced over the network.
 
-The recovery web page is at the device's LAN IP while updating, with `/status`, `POST /retry` and `POST /update`. A replacement update requires `url` (HTTPS), `sha256`, `size`, `build`, and `target: "esp32s3-recovery-v1"`. It validates the target, image size, chip, Luxio app descriptor/build, SHA-256 and ESP image checksum before boot selection. Failed transfers stay in recovery for manual retry. The bootloader's pending-image rollback returns to recovery if the new application resets before confirming startup; there is no previous full application to restore.
+The recovery web page is at the device's LAN IP while updating, with `/status`, `POST /retry` and `POST /update`. A replacement update requires `url` (HTTPS), `sha256`, `size`, `build`, and `target: "<chip>-recovery-v1"`. It validates the target, image size, chip, Luxio app descriptor/build, SHA-256 and ESP image checksum before boot selection. Failed transfers stay in recovery for manual retry. The bootloader's pending-image rollback returns to recovery if the new application resets before confirming startup; there is no previous full application to restore.
 
 Matter is real SDK integration, but commissioning/conformance and sharing the Matter BLE host with Luxio's standalone BLE service remain unfinished. See [release status](docs/release-status.md).
+
+
+## Target matrix
+
+`targets.json` is the source of truth for local builds and the CI matrix. Run `python3 tools/sync-targets.py` to refresh the committed snapshots in sibling Setup and API repositories, or add `--check` to check drift. Each repository builds independently from its committed files.
+
+| Target | CPU | Minimum flash | Bootloader | Main application | Recovery capacity | App capacity | Initial LED GPIO |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| esp32 | Xtensa | 4 MB | 0x1000 | 0x130000 | 1.125 MiB | 2.5 MiB | 16 |
+| esp32s3 | Xtensa | 4 MB | 0x0 | 0x130000 | 1.125 MiB | 2.5 MiB | 16 |
+| esp32c3 | RISC-V | 4 MB | 0x0 | 0x150000 | 1.25 MiB | 2.375 MiB | 4 |
+| esp32c5 | RISC-V | 8 MB | 0x2000 | 0x210000 | 2 MiB | 5.625 MiB | 4 |
+| esp32c6 | RISC-V | 8 MB | 0x0 | 0x210000 | 2 MiB | 5.625 MiB | 4 |
+
+All profiles use DIO flash. C5/C6 need 8 MB for the full Matter application plus HTTPS recovery; their pinned-SDK applications alone exceed the old 2.5 MiB slot. C3 needs a larger recovery slot than ESP32/S3. Each layout is fixed for its `<chip>-recovery-v1` target. Future incompatible layout changes need a new target version and USB migration. The build stages independent source/partition copies under `build/<chip>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
+
+The 256 KiB filesystem and 64 KiB core-dump partition occupy the final 320 KiB of each profile's minimum flash size. Larger physical flash chips can use these images; smaller ones are rejected by Setup. S3 optionally initializes QSPI PSRAM (including the Lolin S3 Mini); OPI PSRAM is not enabled by this profile. Other targets do not require PSRAM. LED buffers grow with the configured strip length; configuration is rejected if RAM is insufficient. The exact LED capacity, Matter heap headroom, USB reset behavior and board wiring still require hardware qualification. Default pins are starting values, not automatic board identification.
+
+ESP32 uses UART0 through an external USB bridge. S3/C3/C5/C6 serve both native USB Serial/JTAG and UART0; requests and replies stay on the same transport.
+
+C2/C61 are not build targets: the pinned SDK does not ship their static libraries (C2 also lacks the current RMT output path). S2 lacks BLE; H2/P4 lack integrated Wi-Fi. Setup and the API reject these targets explicitly.
+
+To prepare publishable manifests after building, set `LUXIO_FIRMWARE_BASE_URL` to an HTTPS directory containing this release, then run `python3 tools/package-firmware.py <chip>`. Upload each target's files under `<base>/<chip>/`, including `manifest.json`, and register it using `node tools/publish-update.mjs build/<chip>/release/manifest.json`. Registration verifies hosted hashes, embedded chip IDs, offsets and sizes before contacting the API. The local manifest with `file` entries is not an API payload. Use a distinct immutable base directory for every build.
+
+Builds default to channel 100 in their manifests. Public channel 0 publication remains a separate release decision and hardware qualification is not implied by compilation. No command in the matrix build flashes a device, uploads files or registers an OTA update.
 
 ## Verification and protocol generation
 
@@ -38,7 +67,7 @@ python3 -m venv --copies .sdk/venv
 .sdk/venv/bin/python -m nanopb.generator.nanopb_generator -I Luxio -D Luxio/src Luxio/luxio.proto
 ```
 
-Hardware tests live in `tools/` and are opt-in. For recovery testing, use `TARGET_FIRMWARE=build/release/luxio.bin` along with `DEVICE_ADDRESS` and `DEVICE_SERIAL`; the installed test build must target the harness's local HTTPS URL. Private backups and test evidence remain in `.sdk/` and must not be published.
+Hardware tests live in `tools/` and are opt-in. For recovery testing, use `TARGET_FIRMWARE=build/esp32s3/release/luxio.bin` along with `DEVICE_ADDRESS` and `DEVICE_SERIAL`; the installed test build must target the harness's local HTTPS URL. Private backups and test evidence remain in `.sdk/` and must not be published.
 
 ## Development simulator and project records
 

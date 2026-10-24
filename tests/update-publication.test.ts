@@ -1,39 +1,56 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-test('publication rejects missing, incompatible and mismatched targets before fetching artifacts', async () => {
-  await mkdir('.sdk', { recursive: true });
-  const directory = await mkdtemp(resolve('.sdk/publication-test-'));
-  try {
-    for (const target of [undefined, 'ab-v1', 'unknown', 'esp32c3-recovery-v1', 'esp32s3-recovery-v1']) {
-      const manifest = { chip: 'esp32s3', target, build: 12, size: 0, url: 'https://firmware.example/app.bin', sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', parts: [] };
-      const path = resolve(directory, 'manifest.json');
-      await writeFile(path, JSON.stringify(manifest));
-      const result = spawnSync(process.execPath, ['--input-type=module', '--eval', `
-        process.argv[2] = ${JSON.stringify(path)};
-        let calls = 0;
-        globalThis.fetch = async (_url, options) => {
-          calls++;
-          if (options?.method === 'POST') {
-            if (JSON.parse(options.body).target !== 'esp32s3-recovery-v1') throw new Error('Wrong publication target');
-            return new Response(null, { status: 201 });
+const targets = JSON.parse(await readFile('targets.json', 'utf8'));
+for (const hardware of targets) {
+  test(`publication validates ${hardware.chip} artifacts before registration`, async () => {
+    await mkdir('.sdk', { recursive: true });
+    const directory = await mkdtemp(resolve('.sdk/publication-test-'));
+    try {
+      for (const scenario of ['valid', 'missing target', 'wrong target', 'wrong image', 'wrong offsets', 'wrong size', 'bad digest']) {
+        const artifacts: Record<string, string> = {};
+        const parts = [hardware.bootloaderAddress, 0x8000, 0xe000, 0x10000, hardware.applicationAddress].map(address => {
+          const bytes = Buffer.alloc(address === hardware.applicationAddress ? 288 : 32);
+          if ([hardware.bootloaderAddress, 0x10000, hardware.applicationAddress].includes(address)) {
+            bytes[0] = 0xe9; bytes.writeUInt16LE(scenario === 'wrong image' ? 99 : hardware.imageChipId, 12);
           }
-          return new Response(new Uint8Array());
-        };
-        try {
-          await import(${JSON.stringify(pathToFileURL(resolve('tools/publish-update.mjs')).href)});
-          if (calls !== 2) throw new Error('Expected artifact verification and publication');
-        } catch (error) {
-          if (calls !== 0) throw new Error('Invalid target reached the network');
-          throw error;
-        }
-      `], { encoding: 'utf8', env: { ...process.env, UPDATE_PUBLISH_TOKEN: 'test-only-token-with-at-least-32-characters' } });
-      if (target === 'esp32s3-recovery-v1') assert.equal(result.status, 0, result.stderr);
-      else { assert.notEqual(result.status, 0); assert.match(result.stderr, /Only recovery firmware matching its chip/); }
-    }
-  } finally { await rm(directory, { recursive: true, force: true }); }
-});
+          const url = `https://firmware.example/${address}.bin`;
+          artifacts[url] = bytes.toString('base64');
+          return { address, url, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+        });
+        const manifest = { chip: hardware.chip, target: `${hardware.chip}-recovery-v1` as string | undefined, build: 23, size: 288, url: parts[4].url, sha256: parts[4].sha256, parts };
+        if (scenario === 'missing target') delete manifest.target;
+        if (scenario === 'wrong target') manifest.target = 'unknown';
+        if (scenario === 'wrong offsets') parts[0].address = 0x3000;
+        if (scenario === 'wrong size') parts[0].size++;
+        if (scenario === 'bad digest') parts[0].sha256 = '0'.repeat(64);
+        const path = resolve(directory, 'manifest.json');
+        await writeFile(path, JSON.stringify(manifest));
+        const result = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+          process.argv[2] = ${JSON.stringify(path)};
+          const artifacts = ${JSON.stringify(artifacts)};
+          let posts = 0;
+          globalThis.fetch = async (url, options) => {
+            if (options?.method === 'POST') { posts++; return new Response(null, { status: 201 }); }
+            if (!artifacts[url]) throw new Error('Unexpected download');
+            return new Response(Buffer.from(artifacts[url], 'base64'));
+          };
+          try {
+            await import(${JSON.stringify(pathToFileURL(resolve('tools/publish-update.mjs')).href)});
+            if (${JSON.stringify(scenario)} !== 'valid' || posts !== 1) throw new Error('Invalid release published');
+          } catch (error) {
+            if (posts) throw new Error('Rejected artifact reached registration');
+            throw error;
+          }
+        `], { encoding: 'utf8', env: { ...process.env, UPDATE_PUBLISH_TOKEN: 'test-only-token-with-at-least-32-characters' } });
+        if (scenario === 'valid') assert.equal(result.status, 0, result.stderr);
+        else { assert.notEqual(result.status, 0, scenario); assert.doesNotMatch(result.stderr, /Invalid release published|Rejected artifact reached registration/); }
+      }
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+}

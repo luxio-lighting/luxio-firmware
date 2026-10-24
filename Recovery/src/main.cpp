@@ -22,12 +22,12 @@ static uint32_t received;
 static const esp_partition_t *application;
 
 void setup() {
-  Serial.begin(115200);
+  // Recovery serves HTTP only; USB programming remains available through the ROM.
   mutex = xSemaphoreCreateMutex();
   prefs.begin("luxio", false);
   application = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, "app0");
   const auto *running = esp_ota_get_running_partition();
-  if (!running || running->address != 0x10000 || running->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY || !application || application->address != 0x130000 || application->size != LUXIO_APP_SIZE) abort();
+  if (!running || running->address != 0x10000 || running->size != LUXIO_LOADER_SIZE || running->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY || !application || application->address != LUXIO_APP_ADDRESS || application->size != LUXIO_APP_SIZE) abort();
   bool pending = prefs.isKey("ota-job");
   if (pending && prefs.getBytesLength("ota-job") == sizeof(job)) prefs.getBytes("ota-job", &job, sizeof(job));
   if (pending && !validUpdateJob(job)) failure = "Saved update request is invalid. Submit a new update.";
@@ -42,11 +42,12 @@ void setup() {
   String ssid = prefs.getString("ssid"), password = prefs.getString("password");
   if (ssid.length()) WiFi.begin(ssid.c_str(), password.c_str());
   server.on("/", HTTP_GET, [] {
-    server.send(200, "text/html", R"HTML(<!doctype html><meta name="viewport" content="width=device-width"><title>Luxio recovery</title><style>body{font:17px system-ui;background:#211b20;color:white;max-width:560px;margin:40px auto;padding:20px}button,input{font:inherit;padding:12px;margin:8px 0;box-sizing:border-box;width:100%}pre{white-space:pre-wrap}</style><h1>Luxio recovery</h1><p>Your light is offline while its firmware updates. Keep it powered on.</p><pre id="state"></pre><button id="retry">Retry update</button><details><summary>Use another firmware update</summary><form id="update"><input name="url" placeholder="Firmware HTTPS URL" required><input name="sha256" placeholder="SHA-256" required><input name="size" type="number" placeholder="Size in bytes" required><input name="build" type="number" placeholder="Build" required><button>Install firmware</button></form></details><script>async function refresh(){try{let s=await(await fetch('/status')).json();document.getElementById('state').textContent=s.status+'\n'+s.received+' / '+s.size+' bytes\n'+s.error;document.getElementById('retry').disabled=s.busy}catch{document.getElementById('state').textContent='Reconnecting…'}}document.getElementById('retry').onclick=async()=>{let r=await fetch('/retry',{method:'POST'});if(!r.ok)alert(await r.text());refresh()};document.getElementById('update').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));d.size=Number(d.size);d.build=Number(d.build);d.target='esp32s3-recovery-v1';let r=await fetch('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok)alert(await r.text());refresh()};refresh();setInterval(refresh,1500)</script>)HTML");
+    server.send(200, "text/html", R"HTML(<!doctype html><meta name="viewport" content="width=device-width"><title>Luxio recovery</title><style>body{font:17px system-ui;background:#211b20;color:white;max-width:560px;margin:40px auto;padding:20px}button,input{font:inherit;padding:12px;margin:8px 0;box-sizing:border-box;width:100%}pre{white-space:pre-wrap}</style><h1>Luxio recovery</h1><p>Your light is offline while its firmware updates. Keep it powered on.</p><pre id="state"></pre><button id="retry">Retry update</button><details><summary>Use another firmware update</summary><form id="update"><input name="url" placeholder="Firmware HTTPS URL" required><input name="sha256" placeholder="SHA-256" required><input name="size" type="number" placeholder="Size in bytes" required><input name="build" type="number" placeholder="Build" required><button>Install firmware</button></form></details><script>async function refresh(){try{let s=await(await fetch('/status')).json();document.getElementById('state').textContent=s.status+'\n'+s.received+' / '+s.size+' bytes\n'+s.error;document.getElementById('retry').disabled=s.busy}catch{document.getElementById('state').textContent='Reconnecting…'}}document.getElementById('retry').onclick=async()=>{let r=await fetch('/retry',{method:'POST'});if(!r.ok)alert(await r.text());refresh()};document.getElementById('update').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));d.size=Number(d.size);d.build=Number(d.build);d.target=(await(await fetch('/status')).json()).target;let r=await fetch('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok)alert(await r.text());refresh()};refresh();setInterval(refresh,1500)</script>)HTML");
   });
   server.on("/status", HTTP_GET, [] {
     xSemaphoreTake(mutex, portMAX_DELAY);
     cJSON *doc = cJSON_CreateObject();
+    cJSON_AddStringToObject(doc, "target", LUXIO_UPDATE_TARGET);
     cJSON_AddStringToObject(doc, "status", status.c_str()); cJSON_AddStringToObject(doc, "error", failure.c_str());
     cJSON_AddBoolToObject(doc, "busy", busy || queued); cJSON_AddNumberToObject(doc, "received", received); cJSON_AddNumberToObject(doc, "size", job.size); cJSON_AddNumberToObject(doc, "build", job.build);
     xSemaphoreGive(mutex);
@@ -101,7 +102,7 @@ void setup() {
         size_t prefix = stream->readBytes(buffer, prefixLength);
         esp_image_header_t imageHeader{}; esp_app_desc_t description{};
         if (prefix == prefixLength) { memcpy(&imageHeader, buffer, sizeof(imageHeader)); memcpy(&description, buffer + sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t), sizeof(description)); }
-        if (prefix != prefixLength || imageHeader.magic != ESP_IMAGE_HEADER_MAGIC || imageHeader.chip_id != ESP_CHIP_ID_ESP32S3 || description.magic_word != ESP_APP_DESC_MAGIC_WORD || strncmp(description.project_name, "Luxio", sizeof(description.project_name)) || strnlen(description.version, sizeof(description.version)) == sizeof(description.version) || String(description.version) != String(current.build)) error = "Not a Luxio ESP32-S3 application image";
+        if (prefix != prefixLength || imageHeader.magic != ESP_IMAGE_HEADER_MAGIC || imageHeader.chip_id != CONFIG_IDF_FIRMWARE_CHIP_ID || description.magic_word != ESP_APP_DESC_MAGIC_WORD || strncmp(description.project_name, "Luxio", sizeof(description.project_name)) || strnlen(description.version, sizeof(description.version)) == sizeof(description.version) || String(description.version) != String(current.build)) error = "Not a Luxio application image for this chip";
         else if (esp_ota_begin(application, OTA_WITH_SEQUENTIAL_WRITES, &handle) != ESP_OK) error = "Unable to begin application write";
         else {
           opened = true;

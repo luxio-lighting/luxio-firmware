@@ -1,11 +1,22 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#ifdef ARDUINO
+#include <sdkconfig.h>
+#endif
+#ifndef CONFIG_IDF_TARGET
+#error CONFIG_IDF_TARGET must identify the firmware chip.
+#endif
 
 // Persisted as one NVS blob: a torn write cannot mix fields from two updates.
-// Recovery is fixed at 0x10000; only the application at 0x130000 is replaceable.
-constexpr uint32_t LUXIO_APP_SIZE = 0x280000;
-constexpr char LUXIO_UPDATE_TARGET[] = "esp32s3-recovery-v1";
+// Recovery starts at 0x10000; the matrix defines its size and the main slot.
+#if !defined(LUXIO_APP_CAPACITY) || !defined(LUXIO_APP_OFFSET) || !defined(LUXIO_LOADER_CAPACITY)
+#error The firmware target must define its recovery layout.
+#endif
+constexpr uint32_t LUXIO_APP_SIZE = LUXIO_APP_CAPACITY;
+constexpr uint32_t LUXIO_APP_ADDRESS = LUXIO_APP_OFFSET;
+constexpr uint32_t LUXIO_LOADER_SIZE = LUXIO_LOADER_CAPACITY;
+constexpr char LUXIO_UPDATE_TARGET[] = CONFIG_IDF_TARGET "-recovery-v1";
 struct UpdateJob {
   uint32_t version = 1;
   uint32_t build = 0;

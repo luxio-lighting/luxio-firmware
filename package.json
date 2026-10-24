@@ -15,7 +15,7 @@
     "bonjour-service": "^1.3.0"
   },
   "scripts": {
-    "test": "mkdir -p .sdk && python3 tools/test-package-firmware.py && c++ -std=c++17 -fsanitize=address,undefined tools/test-transitions.cpp -o .sdk/test-transitions && .sdk/test-transitions && c++ -std=c++17 -fsanitize=address,undefined tools/test-update-job.cpp -o .sdk/test-update-job && .sdk/test-update-job && node --import tsx --test tests/*.test.ts && tools/test-script-storage.sh",
+    "test": "mkdir -p .sdk && python3 tools/test-package-firmware.py && c++ -std=c++17 -fsanitize=address,undefined tools/test-transitions.cpp -o .sdk/test-transitions && .sdk/test-transitions && python3 tools/test-update-targets.py && node --import tsx --test tests/*.test.ts && tools/test-script-storage.sh",
     "check": "tsc --noEmit",
     "postinstall": "node tools/materialize-dependencies.mjs",
     "device": "node --import tsx shared/device/src/server.ts",

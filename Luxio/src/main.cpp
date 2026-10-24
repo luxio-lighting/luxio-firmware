@@ -49,8 +49,8 @@ extern "C" {
 #include <setup_payload/ManualSetupPayloadGenerator.h>
 #include <setup_payload/QRCodeSetupPayloadGenerator.h>
 #endif
-#if !SOC_WIFI_SUPPORTED || !SOC_BLE_SUPPORTED
-#error Luxio requires an ESP32 with integrated Wi-Fi and Bluetooth LE.
+#if !SOC_WIFI_SUPPORTED || !SOC_BLE_SUPPORTED || !SOC_RMT_SUPPORTED
+#error Luxio requires integrated Wi-Fi, Bluetooth LE and RMT.
 #endif
 
 static Preferences prefs;
@@ -60,10 +60,14 @@ static httpd_handle_t httpServer;
 static mbedtls_pk_context identity;
 static String publicKey;
 static String pairingCode, pairingQr;
-static uint8_t pixels[1024][6];
-static OutputTransition transition;
+static uint8_t (*pixels)[6];
+static std::unique_ptr<OutputTransition> transition;
 static bool identifyActive = false;
 static rmt_data_t *symbols;
+static size_t symbolCapacity;
+#ifndef LUXIO_DEFAULT_GPIO
+#define LUXIO_DEFAULT_GPIO 16
+#endif
 static lua_State *animation;
 static char *activeAnimationSource;
 static size_t luaMemory;
@@ -92,7 +96,7 @@ static void stopAnimation() {
   animation = nullptr; luaMemory = 0; state.active_color_id[0] = 0; state.script_name[0] = 0; state.active_script_id[0] = 0; state.active_gradient_id[0] = 0; state.has_gradient = false; memset(&state.gradient, 0, sizeof(state.gradient)); state.mode = luxio_Mode_COLOR;
 }
 static void render() {
-  transition.render(pixels, state.config.led_count, state.on ? state.brightness : 0, millis(), identifyActive);
+  transition->render(pixels, state.config.led_count, state.on ? state.brightness : 0, millis(), identifyActive);
   const bool rgbcct = !strcmp(state.config.strip_type, "WS2805");
   const bool rgbw = !strcmp(state.config.strip_type, "WS2814");
   const int channels = rgbcct ? 5 : rgbw ? 4 : 3;
@@ -101,7 +105,7 @@ static void render() {
     // WS2805: R,G,B,W1(warm),W2(cool); WS2814: R,G,B,W; WS2812: G,R,B.
     const int order[5] = {channels == 3 ? 1 : 0, channels == 3 ? 0 : 1, 2, rgbcct ? 4 : 3, 5};
     for (int c = 0; c < channels; c++) {
-      uint8_t value = transition.displayed[i][order[c]];
+      uint8_t value = transition->displayed[i][order[c]];
       for (int bit = 7; bit >= 0; bit--) {
         auto &symbol = symbols[position++];
         symbol.level0 = 1; symbol.duration0 = value & (1 << bit) ? 8 : 3;
@@ -113,7 +117,7 @@ static void render() {
   rmtWrite(state.config.gpio, symbols, position, 100);
 }
 static void applyColor() {
-  transition.begin(millis());
+  transition->begin(millis());
   const auto &c = state.color;
   for (uint32_t i = 0; i < state.config.led_count; i++) {
     pixels[i][0] = c.red; pixels[i][1] = c.green; pixels[i][2] = c.blue;
@@ -190,8 +194,8 @@ static String startAnimation(const luxio_Script &script) {
   }); lua_setglobal(L, "luxio_get_parameter");
   luaInstructions = 100000; luaDeadline = millis() + 30;
   lua_sethook(L, luaHook, LUA_MASKCOUNT, 1000);
-  transition.begin(millis());
-  animationStarted = millis(); memset(pixels, 0, sizeof(pixels));
+  transition->begin(millis());
+  animationStarted = millis(); memset(pixels, 0, 1024 * 6);
   if (luaL_loadstring(L, source) != LUA_OK || lua_pcall(L, 0, 0, 0) != LUA_OK) {
     String error = lua_tostring(L, -1); stopAnimation(); return error;
   }
@@ -295,24 +299,39 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
     }
     case luxio_Operation_SET_BRIGHTNESS:
       if (request->brightness < 1 || request->brightness > 256) error = "Brightness must be 1-256";
-      else { if (state.brightness != request->brightness) transition.begin(millis()); state.brightness = request->brightness; dirty = true; }
+      else { if (state.brightness != request->brightness) transition->begin(millis()); state.brightness = request->brightness; dirty = true; }
       break;
     case luxio_Operation_SET_POWER:
-      if (state.on != request->on) transition.begin(millis());
+      if (state.on != request->on) transition->begin(millis());
       state.on = request->on; dirty = true; break;
     case luxio_Operation_SET_CONFIG: {
       auto &c = request->config;
       String name = c.name; name.trim();
       if (!request->has_config || !name.length() || c.led_count < 1 || c.led_count > 1024 || c.channel > 100 || (!GPIO_IS_VALID_OUTPUT_GPIO(c.gpio)) || (strcmp(c.strip_type, "WS2805") && strcmp(c.strip_type, "WS2814") && strcmp(c.strip_type, "WS2812"))) { error = "Invalid strip configuration"; break; }
-      // Flash/PSRAM pins and USB pins cannot be used on this board family.
-#if CONFIG_IDF_TARGET_ESP32S3
+      // Reserve the active serial interfaces and the chip's flash/PSRAM pins.
+      if (c.gpio == TX || c.gpio == RX) { error = "GPIO is reserved for serial"; break; }
+#if CONFIG_IDF_TARGET_ESP32
+      if ((c.gpio >= 6 && c.gpio <= 11) || (psramFound() && (c.gpio == 16 || c.gpio == 17))) { error = "GPIO is reserved for flash or PSRAM"; break; }
+#elif CONFIG_IDF_TARGET_ESP32S3
       if ((c.gpio >= 26 && c.gpio <= 37) || c.gpio == 19 || c.gpio == 20) { error = "GPIO is reserved for flash, PSRAM, or USB"; break; }
+#elif CONFIG_IDF_TARGET_ESP32C3
+      if (c.gpio >= 12 && c.gpio <= 19) { error = "GPIO is reserved for flash or USB"; break; }
+#elif CONFIG_IDF_TARGET_ESP32C6
+      if (c.gpio >= 24 || c.gpio == 12 || c.gpio == 13) { error = "GPIO is reserved for flash or USB"; break; }
+#elif CONFIG_IDF_TARGET_ESP32C5
+      if ((c.gpio >= 13 && c.gpio <= 18) || (c.gpio >= 20 && c.gpio <= 22)) { error = "GPIO is reserved for flash or USB"; break; }
 #endif
+      size_t needed = (c.led_count * 40 + 1) * sizeof(rmt_data_t);
+      if (needed > symbolCapacity) {
+        auto *replacement = static_cast<rmt_data_t *>(psramFound() ? ps_realloc(symbols, needed) : realloc(symbols, needed));
+        if (!replacement) { error = "Not enough memory for this LED count"; break; }
+        symbols = replacement; symbolCapacity = needed;
+      }
       if (c.gpio != state.config.gpio) {
         if (!rmtInit(c.gpio, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000)) { error = "Unable to initialize this GPIO"; break; }
         rmtDeinit(state.config.gpio);
       }
-      if (c.gpio != state.config.gpio || c.led_count != state.config.led_count || strcmp(c.strip_type, state.config.strip_type)) { stopAnimation(); state.color = {}; memset(pixels, 0, sizeof(pixels)); memset(transition.displayed, 0, sizeof(transition.displayed)); transition.active = false; }
+      if (c.gpio != state.config.gpio || c.led_count != state.config.led_count || strcmp(c.strip_type, state.config.strip_type)) { stopAnimation(); state.color = {}; memset(pixels, 0, 1024 * 6); memset(transition->displayed, 0, sizeof(transition->displayed)); transition->active = false; }
       state.config = c; strlcpy(state.config.name, name.c_str(), sizeof(state.config.name)); dirty = true;
       MDNS.setInstanceName(state.config.name);
       MDNS.addServiceTxt("luxio", "tcp", "strip", (const char *)c.strip_type);
@@ -330,7 +349,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       break;
     case luxio_Operation_SET_GRADIENT:
       if (!request->has_gradient || !validGradient(request->gradient, state.config.strip_type)) { error = "Gradient requires 2–8 valid colors for this strip"; break; }
-      stopAnimation(); transition.begin(millis());
+      stopAnimation(); transition->begin(millis());
       state.gradient = request->gradient; state.gradient.id[0] = 0; state.gradient.name[0] = 0;
       state.has_gradient = true; state.mode = luxio_Mode_GRADIENT; state.on = true;
       renderGradient(state.gradient, pixels, state.config.led_count); break;
@@ -377,7 +396,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       if (request->operation == luxio_Operation_GET_GRADIENT) response->has_gradient = true;
       else {
         if (!validGradient(response->gradient, state.config.strip_type)) { error = "Gradient contains channels unavailable on this strip"; break; }
-        stopAnimation(); transition.begin(millis());
+        stopAnimation(); transition->begin(millis());
         state.gradient = response->gradient; state.has_gradient = true;
         strlcpy(state.active_gradient_id, request->gradient_id, sizeof(state.active_gradient_id));
         state.mode = luxio_Mode_GRADIENT; state.on = true; dirty = true;
@@ -427,7 +446,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       if (request->operation == luxio_Operation_GET_COLOR) response->has_saved_color = true;
       else {
         if (!validColor(response->saved_color.color, state.config.strip_type)) { error = "Color contains channels unavailable on this strip"; break; }
-        stopAnimation(); transition.begin(millis());
+        stopAnimation(); transition->begin(millis());
         state.color = response->saved_color.color;
         strlcpy(state.active_color_id, request->color_id, sizeof(state.active_color_id));
         state.mode = luxio_Mode_COLOR; state.on = true; dirty = true;
@@ -541,7 +560,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       const auto *running = esp_ota_get_running_partition();
       if (rebootPending) error = "Update already starting";
       else if (!availableBuild || !validUpdateJob(availableUpdate)) error = "No eligible update; check for updates first";
-      else if (!loader || loader->address != 0x10000 || !running || running->address != 0x130000) error = "Recovery layout required; install via USB first";
+      else if (!loader || loader->address != 0x10000 || loader->size != LUXIO_LOADER_SIZE || !running || running->address != LUXIO_APP_ADDRESS || running->size != LUXIO_APP_SIZE) error = "Recovery layout required; install via USB first";
       else {
         // Save the current controls before leaving the main application.
         auto persistent = std::make_unique<luxio_State>(state);
@@ -753,16 +772,23 @@ public:
 extern void startBluetooth();
 void setup() {
   Serial.begin(115200); // Binary protocol only; diagnostics must never be written here.
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial0.begin(115200); // Also serve boards wired through an external USB/UART bridge.
+#endif
   // Keep both large TLS buffers and small crypto allocations in PSRAM.
   // Normal calloc still places small objects in internal RAM; a handshake
   // can otherwise starve Wi-Fi even when Lua already uses PSRAM.
   // Install once before identity, Wi-Fi and Matter initialize crypto.
   if (psramFound()) mbedtls_platform_set_calloc_free(
     [](size_t count, size_t size) -> void * { return ps_calloc(count, size); }, free);
+  // ESP32 has a smaller statically addressable DRAM region than its total heap.
+  transition = std::make_unique<OutputTransition>();
+  pixels = static_cast<uint8_t (*)[6]>(psramFound() ? ps_calloc(1024, 6) : calloc(1024, 6));
+  if (!pixels) abort();
   stateMutex = xSemaphoreCreateMutex();
   prefs.begin("luxio", false);
   state.build = LUXIO_BUILD; state.has_config = true; state.has_color = true;
-  state.config = {"Luxio", "WS2805", 1, 16, 0}; state.brightness = 16; state.on = true;
+  state.config = {"Luxio", "WS2805", 1, LUXIO_DEFAULT_GPIO, 0}; state.brightness = 16; state.on = true;
   size_t savedSize = prefs.getBytesLength("state");
   if (savedSize && savedSize < 4096) {
     std::unique_ptr<uint8_t[]> saved(new uint8_t[savedSize]); prefs.getBytes("state", saved.get(), savedSize);
@@ -799,8 +825,9 @@ void setup() {
   LittleFS.mkdir("/scripts");
   LittleFS.mkdir("/gradients"); LittleFS.mkdir("/colors"); LittleFS.remove("/colors/pending"); LittleFS.remove("/gradients/pending");
   LittleFS.remove("/scripts/pending"); // Discard an interrupted save; the original remains intact.
-  symbols = reinterpret_cast<rmt_data_t *>(ps_malloc((1024 * 40 + 1) * sizeof(rmt_data_t)));
-  if (!symbols) symbols = reinterpret_cast<rmt_data_t *>(malloc((1024 * 40 + 1) * sizeof(rmt_data_t)));
+  // Allocate for the configured strip, not 1024 LEDs on every PSRAM-less board.
+  symbolCapacity = (state.config.led_count * 40 + 1) * sizeof(rmt_data_t);
+  symbols = static_cast<rmt_data_t *>(psramFound() ? ps_malloc(symbolCapacity) : malloc(symbolCapacity));
   if (!symbols || !rmtInit(state.config.gpio, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000)) abort();
   if (state.mode == luxio_Mode_GRADIENT) renderGradient(state.gradient, pixels, state.config.led_count);
   else applyColor();
@@ -841,11 +868,11 @@ void setup() {
   matterLight.onChangeBrightness([](uint8_t brightness) {
     xSemaphoreTake(stateMutex, portMAX_DELAY);
     uint32_t level = constrain((uint32_t(brightness) * 256 + 127) / 254, 1, 256);
-    if (state.brightness != level) transition.begin(millis());
+    if (state.brightness != level) transition->begin(millis());
     state.brightness = level; dirty = true; xSemaphoreGive(stateMutex); return true;
   });
   matterLight.onChangeOnOff([](bool on) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY); transition.begin(millis()); state.on = on; dirty = true; xSemaphoreGive(stateMutex); return true;
+    xSemaphoreTake(stateMutex, portMAX_DELAY); transition->begin(millis()); state.on = on; dirty = true; xSemaphoreGive(stateMutex); return true;
   });
   matterLight.onChangeColorHSV([](espHsvColor_t hsv) {
     hsv.v = 255; auto rgb = espHsvColorToRgbColor(hsv);
@@ -894,8 +921,13 @@ void loop() {
   static uint8_t *output = new uint8_t[32768];
   static uint32_t expected = 0, received = 0, header = 0, lastByte = 0;
   if (header && millis() - lastByte > 3000) { received = 0; expected = 0; header = 0; }
-  while (Serial.available()) {
-    uint8_t byte = Serial.read(); lastByte = millis();
+  static Stream *controlPort = &Serial;
+#if ARDUINO_USB_CDC_ON_BOOT
+  // Keep a complete frame on its original transport; switch only between requests.
+  if (!header) controlPort = Serial.available() ? static_cast<Stream *>(&Serial) : static_cast<Stream *>(&Serial0);
+#endif
+  while (controlPort->available()) {
+    uint8_t byte = controlPort->read(); lastByte = millis();
     if (header < 4) {
       const uint8_t magic[4] = {0x4c, 0x58, 0x50, 0x31};
       header = byte == magic[header] ? header + 1 : byte == magic[0] ? 1 : 0;
@@ -910,7 +942,7 @@ void loop() {
     if (received == expected) {
       size_t length = dispatch(input, received, output);
       uint8_t prefix[8] = {0x4c, 0x58, 0x50, 0x31, uint8_t(length >> 24), uint8_t(length >> 16), uint8_t(length >> 8), uint8_t(length)};
-      Serial.write(prefix, 8); Serial.write(output, length);
+      controlPort->write(prefix, 8); controlPort->write(output, length);
       received = 0; expected = 0; header = 0;
     }
   }
