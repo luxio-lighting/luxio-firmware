@@ -55,7 +55,9 @@ extern "C" {
 #endif
 
 static Preferences prefs;
-static luxio_State state = luxio_State_init_zero;
+// ESP32's static DRAM region is smaller than its runtime heap. Leave room for
+// the Bluetooth controller's fixed allocations alongside Matter.
+static luxio_State &state = *new luxio_State{};
 static SemaphoreHandle_t stateMutex;
 static httpd_handle_t httpServer;
 static mbedtls_pk_context identity;
@@ -66,6 +68,8 @@ static std::unique_ptr<OutputTransition> transition;
 static bool identifyActive = false;
 static rmt_data_t *symbols;
 static size_t symbolCapacity;
+static int activeRelayGpio = -1;
+static bool activeRelayInverted, relayPowered;
 #ifndef LUXIO_DEFAULT_GPIO
 #define LUXIO_DEFAULT_GPIO 16
 #endif
@@ -98,6 +102,29 @@ static void stopAnimation() {
 }
 static void render() {
   transition->render(pixels, state.config.led_count, state.on ? state.brightness : 0, millis(), identifyActive);
+  const auto &relay = state.config.relay;
+  const int relayGpio = state.config.has_relay && relay.enabled ? int(relay.gpio) : -1;
+  if (relayGpio != activeRelayGpio || relay.inverted != activeRelayInverted) {
+    if (activeRelayGpio >= 0) {
+      digitalWrite(activeRelayGpio, activeRelayInverted ? HIGH : LOW);
+      pinMode(activeRelayGpio, INPUT);
+    }
+    activeRelayGpio = relayGpio; activeRelayInverted = relay.inverted; relayPowered = false;
+    if (activeRelayGpio >= 0) {
+      // Set the inactive output latch before enabling output to avoid a pulse.
+      gpio_set_level(gpio_num_t(activeRelayGpio), activeRelayInverted ? 1 : 0);
+      pinMode(activeRelayGpio, OUTPUT);
+    }
+  }
+  if (activeRelayGpio >= 0) {
+    // Finish the off fade before cutting strip power. An off boot stays off.
+    const bool powered = state.on || identifyActive || (relayPowered && transition->active);
+    if (powered != relayPowered) {
+      digitalWrite(activeRelayGpio, powered != activeRelayInverted ? HIGH : LOW);
+      relayPowered = powered;
+      if (powered) delay(20); // Let the strip power supply settle before data.
+    }
+  }
   const bool rgbcct = !strcmp(state.config.strip_type, "WS2805");
   const bool rgbw = !strcmp(state.config.strip_type, "WS2814");
   const int channels = rgbcct ? 5 : rgbw ? 4 : 3;
@@ -322,25 +349,36 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
     case luxio_Operation_SET_CONFIG: {
       auto &c = request->config;
       String name = c.name; name.trim();
+      // Old clients do not know this field; ordinary settings edits retain it.
+      if (!c.has_relay) { c.has_relay = state.config.has_relay; c.relay = state.config.relay; }
       if (!request->has_config || !name.length() || c.led_count < 1 || c.led_count > 1024 || c.channel > 100 || (!GPIO_IS_VALID_OUTPUT_GPIO(c.gpio)) || (strcmp(c.strip_type, "WS2805") && strcmp(c.strip_type, "WS2814") && strcmp(c.strip_type, "WS2812"))) { error = "Invalid strip configuration"; break; }
+      if (c.has_relay && c.relay.enabled && (c.relay.gpio == c.gpio || !GPIO_IS_VALID_OUTPUT_GPIO(c.relay.gpio))) { error = "Relay GPIO must be a separate valid output pin"; break; }
       // Reserve the active serial interfaces and the chip's flash/PSRAM pins.
-      if (c.gpio == TX || c.gpio == RX) { error = "GPIO is reserved for serial"; break; }
+      const uint32_t pins[] = {c.gpio, c.has_relay && c.relay.enabled ? c.relay.gpio : c.gpio};
+      for (uint32_t pin : pins) {
+      if (pin == TX || pin == RX) { error = "GPIO is reserved for serial"; break; }
 #if CONFIG_IDF_TARGET_ESP32
-      if ((c.gpio >= 6 && c.gpio <= 11) || (psramFound() && (c.gpio == 16 || c.gpio == 17))) { error = "GPIO is reserved for flash or PSRAM"; break; }
+      if ((pin >= 6 && pin <= 11) || (psramFound() && (pin == 16 || pin == 17))) { error = "GPIO is reserved for flash or PSRAM"; break; }
 #elif CONFIG_IDF_TARGET_ESP32S3
-      if ((c.gpio >= 26 && c.gpio <= 37) || c.gpio == 19 || c.gpio == 20) { error = "GPIO is reserved for flash, PSRAM, or USB"; break; }
+      if ((pin >= 26 && pin <= 37) || pin == 19 || pin == 20) { error = "GPIO is reserved for flash, PSRAM, or USB"; break; }
 #elif CONFIG_IDF_TARGET_ESP32C3
-      if (c.gpio >= 12 && c.gpio <= 19) { error = "GPIO is reserved for flash or USB"; break; }
+      if (pin >= 12 && pin <= 19) { error = "GPIO is reserved for flash or USB"; break; }
 #elif CONFIG_IDF_TARGET_ESP32C6
-      if (c.gpio >= 24 || c.gpio == 12 || c.gpio == 13) { error = "GPIO is reserved for flash or USB"; break; }
+      if (pin >= 24 || pin == 12 || pin == 13) { error = "GPIO is reserved for flash or USB"; break; }
 #elif CONFIG_IDF_TARGET_ESP32C5
-      if ((c.gpio >= 13 && c.gpio <= 18) || (c.gpio >= 20 && c.gpio <= 22)) { error = "GPIO is reserved for flash or USB"; break; }
+      if ((pin >= 13 && pin <= 18) || (pin >= 20 && pin <= 22)) { error = "GPIO is reserved for flash or USB"; break; }
 #endif
+      }
+      if (error.length()) break;
       size_t needed = (c.led_count * 40 + 1) * sizeof(rmt_data_t);
       if (needed > symbolCapacity) {
         auto *replacement = static_cast<rmt_data_t *>(psramFound() ? ps_realloc(symbols, needed) : realloc(symbols, needed));
         if (!replacement) { error = "Not enough memory for this LED count"; break; }
         symbols = replacement; symbolCapacity = needed;
+      }
+      if (activeRelayGpio >= 0 && (!c.relay.enabled || int(c.relay.gpio) != activeRelayGpio || c.relay.inverted != activeRelayInverted)) {
+        digitalWrite(activeRelayGpio, activeRelayInverted ? HIGH : LOW);
+        pinMode(activeRelayGpio, INPUT); activeRelayGpio = -1; relayPowered = false;
       }
       if (c.gpio != state.config.gpio) {
         if (!rmtInit(c.gpio, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000)) { error = "Unable to initialize this GPIO"; break; }
@@ -614,6 +652,15 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
     network.connected = esp_wifi_sta_get_ap_info(ap.get()) == ESP_OK;
     if (network.connected) {
       network.rssi = ap->rssi; network.channel = ap->primary;
+      strlcpy(network.ssid, WiFi.SSID().c_str(), sizeof(network.ssid));
+      const IPAddress gateway = WiFi.gatewayIP();
+      if (gateway != IPAddress(0, 0, 0, 0)) strlcpy(network.gateway, gateway.toString().c_str(), sizeof(network.gateway));
+      for (uint8_t index = 0; index < 2; index++) {
+        const IPAddress dns = WiFi.dnsIP(index);
+        if (dns != IPAddress(0, 0, 0, 0)) {
+          strlcpy(network.dns[network.dns_count++], dns.toString().c_str(), sizeof(network.dns[0]));
+        }
+      }
       snprintf(network.bssid, sizeof(network.bssid), "%02x:%02x:%02x:%02x:%02x:%02x", ap->bssid[0], ap->bssid[1], ap->bssid[2], ap->bssid[3], ap->bssid[4], ap->bssid[5]);
     }
     wifi_ps_type_t powerSave = WIFI_PS_NONE;

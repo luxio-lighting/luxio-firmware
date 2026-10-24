@@ -7,7 +7,7 @@
 - HTTP: `POST /api`, `Content-Type: application/x-protobuf`, raw Request bytes; raw Response bytes, including an error string on operation failure.
 - WebSocket: `/api/ws`, binary raw Protobuf frames. Responses echo the request ID. Unsolicited state events use ID 0. Firmware emits changed state at most every 250 ms.
 - UART: 115200 baud; `LXP1` ASCII magic, 4-byte unsigned big-endian payload length, then Protobuf payload. Boot text is discarded until the magic appears. Maximum payload 32768 bytes; partial frames expire after 3 seconds.
-- BLE: service `e97b1000-3c27-4a20-9df4-7d025bc7e451`; RX characteristic `e97b1001-3c27-4a20-9df4-7d025bc7e451` (write with response), TX `e97b1002-3c27-4a20-9df4-7d025bc7e451` (notify). Subscribe before writing. Use the UART framing across ATT chunks of at most MTU−3 bytes. One request may be in flight; wait for its complete response before the next. No Luxio pairing/bonding is required. Currently enabled only in the Matter-disabled diagnostic build; integration with Matter's GATT host remains a release blocker.
+- BLE: service `e97b1000-3c27-4a20-9df4-7d025bc7e451`; RX characteristic `e97b1001-3c27-4a20-9df4-7d025bc7e451` (write with response), TX `e97b1002-3c27-4a20-9df4-7d025bc7e451` (notify). Subscribe before writing. Use the UART framing across ATT chunks of at most MTU−3 bytes. One request may be in flight; wait for its complete response before the next. Build 24 requires encrypted writes and supports OS-managed Just Works bonding. Luxio owns Bluetooth while Matter uses IP commissioning. Physical qualification of this combined build remains pending.
 
 | Operation | Number | Request payload |
 | --- | --- | --- |
@@ -83,3 +83,11 @@ Device CORS/Private Network Access response headers are implemented. They cannot
 The application persists the accepted HTTPS URL, SHA-256, size, build and flash-layout target in one NVS blob, selects the fixed recovery loader, and reboots. The normal Protobuf API is offline during recovery. The loader exposes HTTP `GET /status`, `POST /retry`, and `POST /update` on port 80. Its replacement-update JSON requires `target: "esp32s3-recovery-v1"`, `url`, `sha256`, `size`, and `build`. Normal firmware updates never write the loader, partition table, NVS or script filesystem.
 
 The cloud `/updates` query requires `target=esp32s3-recovery-v1` for ESP32-S3. Only recovery targets matching their chip are accepted; omitted targets and other layouts are rejected. There is no timer or boot-time path that checks for or installs new releases. A loader reboot resumes only the persisted request that the user already accepted.
+
+`GET_STATE` includes read-only `NetworkStatus` diagnostics in response field 21. Fields 11–13 report the currently connected Wi-Fi SSID, gateway, and up to two DNS servers. They are empty when disconnected; the IP address remains in `State.lan_ip`. No Wi-Fi password is returned. Older firmware omits these additive fields.
+
+`Config.relay` (field 6) is an optional message with `enabled` (1), `gpio` (2),
+and `inverted` (3). Old saved configurations leave it disabled. SET_CONFIG without
+this message retains the existing relay settings; an explicit `enabled=false`
+disables it. GPIO0 remains a valid selection. Firmware validates output capability,
+reserved pins and conflicts with the LED data pin. Relay settings require build 27.

@@ -34,7 +34,7 @@ async def main():
                 break
             responses.put_nowait(pb.Response.FromString(bytes(buffer[8:8+size])))
             del buffer[:8+size]
-    async with BleakClient(device) as client:
+    async with BleakClient(device, timeout=45) as client:
         await client.start_notify(TX, notification)
         next_id = 0
         async def send(operation, **fields):
@@ -52,6 +52,18 @@ async def main():
         initial = (await send(pb.GET_STATE)).state
         assert initial.device_id == args.device_id, 'Discovered a different device; no changes made'
         print('PASS: Bluetooth identity and fragmented GET_STATE', flush=True)
+        assert initial.build >= 24, 'Use the combined Matter + Luxio BLE build'
+        pairing = await send(pb.GET_PAIRING_CODE)
+        assert pairing.pairing_code and pairing.pairing_qr.startswith('MT:'), 'Matter pairing data missing'
+        scan = await send(pb.SCAN_WIFI)
+        for _ in range(30):
+            if not scan.wifi_scanning:
+                break
+            await asyncio.sleep(1)
+            scan = await send(pb.GET_STATE)
+        assert not scan.wifi_scanning and not scan.wifi_scan_error, 'Wi-Fi scan failed'
+        print('PASS: Matter QR/manual code and Wi-Fi scan over BLE', flush=True)
+        active = (await send(pb.GET_SCRIPT)).script if initial.mode == pb.ANIMATION else None
         script_id = None
         try:
             await send(pb.SET_BRIGHTNESS, brightness=16)
@@ -65,7 +77,7 @@ async def main():
             await send(pb.RUN_SCRIPT, script_id=script_id)
             dimmed = await send(pb.SET_BRIGHTNESS, brightness=8)
             assert dimmed.state.active_script_id == script_id
-            stopped = await send(pb.SET_COLOR, color=pb.Color(cool_white=128))
+            stopped = await send(pb.SET_COLOR, color=pb.Color(green=128))
             assert not stopped.state.active_script_id
             await send(pb.DELETE_SCRIPT, script_id=script_id)
             script_id = None
@@ -73,10 +85,28 @@ async def main():
         finally:
             if script_id:
                 await send(pb.DELETE_SCRIPT, script_id=script_id)
-            await send(pb.SET_COLOR, color=initial.color)
+            if active is not None:
+                await send(pb.SET_SCRIPT, script=active)
+            elif initial.mode == pb.GRADIENT:
+                if initial.active_gradient_id:
+                    await send(pb.RUN_GRADIENT, gradient_id=initial.active_gradient_id)
+                else:
+                    await send(pb.SET_GRADIENT, gradient=initial.gradient)
+            elif initial.active_color_id:
+                await send(pb.RUN_COLOR, color_id=initial.active_color_id)
+            else:
+                await send(pb.SET_COLOR, color=initial.color)
             await send(pb.SET_BRIGHTNESS, brightness=initial.brightness)
-            if initial.active_script_id:
-                await send(pb.RUN_SCRIPT, script_id=initial.active_script_id)
+            await send(pb.SET_POWER, on=initial.on)
+        await client.stop_notify(TX)
+    # A new connection must use a fresh frame/session and retain its identity.
+    buffer.clear()
+    async with BleakClient(device, timeout=45) as client:
+        await client.start_notify(TX, notification)
+        result = await send(pb.GET_STATE)
+        assert result.state.device_id == initial.device_id
+        assert result.state.on == initial.on and result.state.brightness == initial.brightness
+        print('PASS: BLE reconnect and restored power/brightness', flush=True)
         await client.stop_notify(TX)
 
 asyncio.run(main())

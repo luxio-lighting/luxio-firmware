@@ -37,6 +37,9 @@ luxio.State.parameters max_count:16
 luxio.Request.parameters max_count:16
 
 luxio.NetworkStatus.bssid max_size:18
+luxio.NetworkStatus.ssid max_size:33
+luxio.NetworkStatus.gateway max_size:46
+luxio.NetworkStatus.dns max_count:2 max_size:46
 luxio.Response.animation_error max_size:160
 luxio.Script.preview max_count:8
 luxio.State.animation_preview max_count:8

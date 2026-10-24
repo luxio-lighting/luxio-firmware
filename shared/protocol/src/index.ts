@@ -18,6 +18,7 @@ export const configSchema = z.object({
   name: z.string().trim().min(1).max(63), stripType: z.enum(['WS2805', 'WS2814', 'WS2812']),
   ledCount: z.number().int().min(1).max(1024), gpio: z.number().int().min(0).max(54),
   channel: z.number().int().min(0).max(100),
+  relay: z.object({ enabled: z.boolean(), gpio: z.number().int().min(0).max(54), inverted: z.boolean() }).nullish(),
 });
 export const parameterSchema = z.object({ name: z.string().min(1).max(32), boolean: z.boolean().default(false), numberInput: z.boolean().optional(), value: z.number().finite(), defaultValue: z.number().default(0), minimum: z.number().default(0), maximum: z.number().default(0) });
 export const scriptSchema = z.object({ preview: z.array(colorSchema).max(8).default([]), id: z.uuid(), name: z.string().trim().min(1).max(63), source: z.string().min(1).max(16384), mode: z.union([z.literal(0), z.literal(2)]).optional().transform(() => 2), parameters: z.array(parameterSchema).max(16).default([]) });
@@ -31,7 +32,7 @@ export type Script = { preview?: Color[]; id: string; name: string; source: stri
 export interface WifiNetwork { ssid: string; rssi: number; passwordRequired: boolean }
 export interface State { animationRevision?: number; animationPreview?: Color[]; deviceId: string; build: number; config: Config; brightness: number; on: boolean; color: Color; activeScriptId: string; lanIp: string; mode?: number; activeGradientId?: string; gradient?: Gradient; activeColorId?: string; scriptName?: string; parameters?: AnimationParameter[] }
 export interface Request { id: number; operation: number; color?: Color; brightness?: number; on?: boolean; config?: Config; wifi?: { ssid: string; password: string }; script?: Script; scriptId?: string; scriptOffset?: number; gradient?: Gradient; gradientId?: string; gradientOffset?: number; savedColor?: SavedColor; colorId?: string; colorOffset?: number; parameters?: AnimationParameter[] }
-export interface NetworkStatus { connected: boolean; rssi: number; bssid: string; channel: number; powerSave: number; uptimeMs: number; internalFree: number; internalLargestBlock: number; disconnectCount: number; lastDisconnectReason: number }
+export interface NetworkStatus { ssid?: string; gateway?: string; dns?: string[]; connected: boolean; rssi: number; bssid: string; channel: number; powerSave: number; uptimeMs: number; internalFree: number; internalLargestBlock: number; disconnectCount: number; lastDisconnectReason: number }
 export interface Response { animationError?: string; networkStatus?: NetworkStatus; id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string; nextScriptOffset?: number; wifiNetworks?: WifiNetwork[]; wifiScanning?: boolean; wifiScanError?: string; gradients?: Gradient[]; gradient?: Gradient; nextGradientOffset?: number; colors?: SavedColor[]; savedColor?: SavedColor; nextColorOffset?: number }
 
 export function encodeRequest(request: Request): Uint8Array {

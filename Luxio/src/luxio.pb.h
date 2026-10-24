@@ -62,12 +62,22 @@ typedef struct _luxio_Color {
     uint32_t cool_white;
 } luxio_Color;
 
+/* An absent relay leaves existing settings unchanged in SET_CONFIG.
+ Send enabled=false explicitly to disable it. Older saved configs default off. */
+typedef struct _luxio_RelayConfig {
+    bool enabled;
+    uint32_t gpio;
+    bool inverted;
+} luxio_RelayConfig;
+
 typedef struct _luxio_Config {
     char name[64];
     char strip_type[8];
     uint32_t led_count;
     uint32_t gpio;
     uint32_t channel;
+    bool has_relay;
+    luxio_RelayConfig relay;
 } luxio_Config;
 
 typedef struct _luxio_Wifi {
@@ -178,6 +188,10 @@ typedef struct _luxio_NetworkStatus {
     uint32_t internal_largest_block;
     uint32_t disconnect_count;
     uint32_t last_disconnect_reason;
+    char ssid[33];
+    char gateway[46];
+    pb_size_t dns_count;
+    char dns[2][46];
 } luxio_NetworkStatus;
 
 typedef struct _luxio_Response {
@@ -227,6 +241,7 @@ extern "C" {
 
 
 
+
 #define luxio_Script_mode_ENUMTYPE luxio_Mode
 
 
@@ -240,7 +255,8 @@ extern "C" {
 
 /* Initializer values for message structs */
 #define luxio_Color_init_default                 {0, 0, 0, 0, 0, 0}
-#define luxio_Config_init_default                {"", "", 0, 0, 0}
+#define luxio_RelayConfig_init_default           {0, 0, 0}
+#define luxio_Config_init_default                {"", "", 0, 0, 0, false, luxio_RelayConfig_init_default}
 #define luxio_Wifi_init_default                  {"", ""}
 #define luxio_WifiNetwork_init_default           {"", 0, 0}
 #define luxio_AnimationParameter_init_default    {"", 0, 0, 0, 0, 0, 0}
@@ -249,10 +265,11 @@ extern "C" {
 #define luxio_SavedColor_init_default            {"", "", false, luxio_Color_init_default}
 #define luxio_State_init_default                 {"", 0, false, luxio_Config_init_default, 0, false, luxio_Color_init_default, "", "", _luxio_Mode_MIN, 0, "", false, luxio_Gradient_init_default, "", "", 0, {luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default}, 0, {luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default}, 0}
 #define luxio_Request_init_default               {0, _luxio_Operation_MIN, false, luxio_Color_init_default, 0, false, luxio_Config_init_default, false, luxio_Wifi_init_default, NULL, "", 0, 0, NULL, "", 0, false, luxio_SavedColor_init_default, "", 0, 0, {luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default}}
-#define luxio_NetworkStatus_init_default         {0, 0, "", 0, 0, 0, 0, 0, 0, 0}
+#define luxio_NetworkStatus_init_default         {0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", "", 0, {"", ""}}
 #define luxio_Response_init_default              {0, "", NULL, {{NULL}, NULL}, NULL, "", "", 0, 0, "", 0, 0, {luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default, luxio_WifiNetwork_init_default}, 0, "", {{NULL}, NULL}, NULL, 0, {{NULL}, NULL}, false, luxio_SavedColor_init_default, 0, false, luxio_NetworkStatus_init_default, ""}
 #define luxio_Color_init_zero                    {0, 0, 0, 0, 0, 0}
-#define luxio_Config_init_zero                   {"", "", 0, 0, 0}
+#define luxio_RelayConfig_init_zero              {0, 0, 0}
+#define luxio_Config_init_zero                   {"", "", 0, 0, 0, false, luxio_RelayConfig_init_zero}
 #define luxio_Wifi_init_zero                     {"", ""}
 #define luxio_WifiNetwork_init_zero              {"", 0, 0}
 #define luxio_AnimationParameter_init_zero       {"", 0, 0, 0, 0, 0, 0}
@@ -261,7 +278,7 @@ extern "C" {
 #define luxio_SavedColor_init_zero               {"", "", false, luxio_Color_init_zero}
 #define luxio_State_init_zero                    {"", 0, false, luxio_Config_init_zero, 0, false, luxio_Color_init_zero, "", "", _luxio_Mode_MIN, 0, "", false, luxio_Gradient_init_zero, "", "", 0, {luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero}, 0, {luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero}, 0}
 #define luxio_Request_init_zero                  {0, _luxio_Operation_MIN, false, luxio_Color_init_zero, 0, false, luxio_Config_init_zero, false, luxio_Wifi_init_zero, NULL, "", 0, 0, NULL, "", 0, false, luxio_SavedColor_init_zero, "", 0, 0, {luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero}}
-#define luxio_NetworkStatus_init_zero            {0, 0, "", 0, 0, 0, 0, 0, 0, 0}
+#define luxio_NetworkStatus_init_zero            {0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", "", 0, {"", ""}}
 #define luxio_Response_init_zero                 {0, "", NULL, {{NULL}, NULL}, NULL, "", "", 0, 0, "", 0, 0, {luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero, luxio_WifiNetwork_init_zero}, 0, "", {{NULL}, NULL}, NULL, 0, {{NULL}, NULL}, false, luxio_SavedColor_init_zero, 0, false, luxio_NetworkStatus_init_zero, ""}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -271,11 +288,15 @@ extern "C" {
 #define luxio_Color_white_tag                    4
 #define luxio_Color_warm_white_tag               5
 #define luxio_Color_cool_white_tag               6
+#define luxio_RelayConfig_enabled_tag            1
+#define luxio_RelayConfig_gpio_tag               2
+#define luxio_RelayConfig_inverted_tag           3
 #define luxio_Config_name_tag                    1
 #define luxio_Config_strip_type_tag              2
 #define luxio_Config_led_count_tag               3
 #define luxio_Config_gpio_tag                    4
 #define luxio_Config_channel_tag                 5
+#define luxio_Config_relay_tag                   6
 #define luxio_Wifi_ssid_tag                      1
 #define luxio_Wifi_password_tag                  2
 #define luxio_WifiNetwork_ssid_tag               1
@@ -344,6 +365,9 @@ extern "C" {
 #define luxio_NetworkStatus_internal_largest_block_tag 8
 #define luxio_NetworkStatus_disconnect_count_tag 9
 #define luxio_NetworkStatus_last_disconnect_reason_tag 10
+#define luxio_NetworkStatus_ssid_tag             11
+#define luxio_NetworkStatus_gateway_tag          12
+#define luxio_NetworkStatus_dns_tag              13
 #define luxio_Response_id_tag                    1
 #define luxio_Response_error_tag                 2
 #define luxio_Response_state_tag                 3
@@ -378,14 +402,23 @@ X(a, STATIC,   SINGULAR, UINT32,   cool_white,        6)
 #define luxio_Color_CALLBACK NULL
 #define luxio_Color_DEFAULT NULL
 
+#define luxio_RelayConfig_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, BOOL,     enabled,           1) \
+X(a, STATIC,   SINGULAR, UINT32,   gpio,              2) \
+X(a, STATIC,   SINGULAR, BOOL,     inverted,          3)
+#define luxio_RelayConfig_CALLBACK NULL
+#define luxio_RelayConfig_DEFAULT NULL
+
 #define luxio_Config_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   name,              1) \
 X(a, STATIC,   SINGULAR, STRING,   strip_type,        2) \
 X(a, STATIC,   SINGULAR, UINT32,   led_count,         3) \
 X(a, STATIC,   SINGULAR, UINT32,   gpio,              4) \
-X(a, STATIC,   SINGULAR, UINT32,   channel,           5)
+X(a, STATIC,   SINGULAR, UINT32,   channel,           5) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  relay,             6)
 #define luxio_Config_CALLBACK NULL
 #define luxio_Config_DEFAULT NULL
+#define luxio_Config_relay_MSGTYPE luxio_RelayConfig
 
 #define luxio_Wifi_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   ssid,              1) \
@@ -503,7 +536,10 @@ X(a, STATIC,   SINGULAR, UINT32,   uptime_ms,         6) \
 X(a, STATIC,   SINGULAR, UINT32,   internal_free,     7) \
 X(a, STATIC,   SINGULAR, UINT32,   internal_largest_block,   8) \
 X(a, STATIC,   SINGULAR, UINT32,   disconnect_count,   9) \
-X(a, STATIC,   SINGULAR, UINT32,   last_disconnect_reason,  10)
+X(a, STATIC,   SINGULAR, UINT32,   last_disconnect_reason,  10) \
+X(a, STATIC,   SINGULAR, STRING,   ssid,             11) \
+X(a, STATIC,   SINGULAR, STRING,   gateway,          12) \
+X(a, STATIC,   REPEATED, STRING,   dns,              13)
 #define luxio_NetworkStatus_CALLBACK NULL
 #define luxio_NetworkStatus_DEFAULT NULL
 
@@ -543,6 +579,7 @@ X(a, STATIC,   SINGULAR, STRING,   animation_error,  22)
 #define luxio_Response_network_status_MSGTYPE luxio_NetworkStatus
 
 extern const pb_msgdesc_t luxio_Color_msg;
+extern const pb_msgdesc_t luxio_RelayConfig_msg;
 extern const pb_msgdesc_t luxio_Config_msg;
 extern const pb_msgdesc_t luxio_Wifi_msg;
 extern const pb_msgdesc_t luxio_WifiNetwork_msg;
@@ -557,6 +594,7 @@ extern const pb_msgdesc_t luxio_Response_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define luxio_Color_fields &luxio_Color_msg
+#define luxio_RelayConfig_fields &luxio_RelayConfig_msg
 #define luxio_Config_fields &luxio_Config_msg
 #define luxio_Wifi_fields &luxio_Wifi_msg
 #define luxio_WifiNetwork_fields &luxio_WifiNetwork_msg
@@ -575,12 +613,13 @@ extern const pb_msgdesc_t luxio_Response_msg;
 #define LUXIO_LUXIO_PB_H_MAX_SIZE                luxio_Script_size
 #define luxio_AnimationParameter_size            74
 #define luxio_Color_size                         36
-#define luxio_Config_size                        92
+#define luxio_Config_size                        104
 #define luxio_Gradient_size                      2458
-#define luxio_NetworkStatus_size                 69
+#define luxio_NetworkStatus_size                 244
+#define luxio_RelayConfig_size                   10
 #define luxio_SavedColor_size                    141
 #define luxio_Script_size                        18013
-#define luxio_State_size                         4428
+#define luxio_State_size                         4440
 #define luxio_WifiNetwork_size                   42
 #define luxio_Wifi_size                          100
 

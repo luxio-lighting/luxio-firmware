@@ -9,6 +9,9 @@
 PB_BIND(luxio_Color, luxio_Color, AUTO)
 
 
+PB_BIND(luxio_RelayConfig, luxio_RelayConfig, AUTO)
+
+
 PB_BIND(luxio_Config, luxio_Config, AUTO)
 
 

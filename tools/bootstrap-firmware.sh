@@ -19,3 +19,7 @@ build_cache:
 EOF
 "$ARDUINO_CLI" --config-file .sdk/arduino-cli.yaml core update-index
 "$ARDUINO_CLI" --config-file .sdk/arduino-cli.yaml core install esp32:esp32@3.3.3
+
+# Original ESP32 needs the smaller NimBLE host alongside Matter.
+"$ARDUINO_CLI" --config-file .sdk/arduino-cli.yaml lib update-index
+"$ARDUINO_CLI" --config-file .sdk/arduino-cli.yaml lib install NimBLE-Arduino@2.5.1

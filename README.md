@@ -29,7 +29,7 @@ Initial installation requires USB flashing of the bootloader, partition table, e
 
 The recovery web page is at the device's LAN IP while updating, with `/status`, `POST /retry` and `POST /update`. A replacement update requires `url` (HTTPS), `sha256`, `size`, `build`, and `target: "<chip>-recovery-v1"`. It validates the target, image size, chip, Luxio app descriptor/build, SHA-256 and ESP image checksum before boot selection. Failed transfers stay in recovery for manual retry. The bootloader's pending-image rollback returns to recovery if the new application resets before confirming startup; there is no previous full application to restore.
 
-Matter is real SDK integration, but commissioning/conformance and sharing the Matter BLE host with Luxio's standalone BLE service remain unfinished. See [release status](docs/release-status.md).
+Matter uses Wi-Fi/IP; on S3/C3/C5/C6, Luxio exclusively owns Bluetooth for discovery, setup and control. The original ESP32 uses USB/Wi-Fi controls because the combined BLE/Matter stack exhausts its RAM. Physical qualification of the combined build and Matter conformance remain pending. See [release status](docs/release-status.md).
 
 
 ## Target matrix
@@ -116,3 +116,67 @@ Preset catalogs belong to the mobile apps and Studio. Firmware accepts client-su
 ## Lua color capabilities (build 22)
 
 `luxio_get_color_type()` returns `"RGB"`, `"RGBW"`, or `"RGBCCT"` from the configured strip type (WS2812, WS2814, or WS2805 respectively). It is available at the top level, in `setup()`, and in `loop()`. It reports configured channels; it does not detect the attached hardware. Older firmware can use `luxio_get_color_type and luxio_get_color_type() or "RGB"` to fall back to RGB output.
+
+## Luxio Bluetooth with Matter over Wi-Fi
+
+The S3/C3/C5/C6 firmware exposes the Luxio service
+`e97b1000-3c27-4a20-9df4-7d025bc7e451`, including before Wi-Fi is configured.
+RX `1001` accepts writes with response and requires encryption; TX `1002` sends
+notifications. Subscribe first, then send an LXP1-framed Protobuf request in
+chunks no larger than MTU−3 (maximum 512). Wait for the complete response before
+sending another request. The displayless light uses Just Works bonding; the OS
+handles the pairing prompt. This encrypts the link but is not an ownership or
+passkey authentication scheme.
+
+The iOS app can discover/control the light, scan networks (SCAN_WIFI), submit
+credentials (SET_WIFI), and fetch the Matter QR/manual code (GET_PAIRING_CODE)
+over this connection. Matter's QR payload advertises on-network commissioning;
+connect the light to Wi-Fi before adding it to a Matter controller. No Matter
+BLE service is advertised. Existing fabrics and Wi-Fi credentials are preserved.
+
+The pinned Arduino 3.3.3 SDK provides NimBLE on S3/C3/C5/C6. Original ESP32
+already has CHIPoBLE disabled. Its public Matter build keeps Luxio BLE disabled:
+the no-PSRAM target exhausted RAM during physical startup testing. USB and Wi-Fi
+controls remain available. Diagnostic builds with `LUXIO_MATTER=0` use
+`bluetooth_esp32.cpp` and NimBLE-Arduino 2.5.1, installed by
+`tools/bootstrap-firmware.sh`, with one peripheral connection. The explicit
+Arduino BT link anchor prevents controller RAM being released before NimBLE
+starts. Light state uses the heap to leave static DRAM for the radio.
+For S3/C3/C5/C6, `tools/build-firmware.py` creates a target-local copy of
+the precompiled Matter archive and weakens five lifecycle/advertising methods.
+`matter_network_only.cpp` provides their replacements: it initializes Matter's
+logical BleLayer ABI but never initializes, advertises, handles radio events or
+reclaims the Luxio Bluetooth host. Unsupported Matter BLE advertising still
+allows IP commissioning in the SDK. The installed SDK archive is not modified.
+Method symbols are checked at build time; SDK upgrades require reviewing this
+adapter. Use the repository build script, not a direct Arduino IDE compile.
+
+Input buffers are allocated for each frame and released after processing,
+disconnect, or a three-second partial-frame timeout. Output buffers exist only
+during a reply: 32 KiB with PSRAM, 8 KiB without it. Output allocation failures return
+the same bounded Protobuf error as USB; there are no permanent 64 KiB BLE buffers.
+The buffers use PSRAM when available. Disconnects invalidate partially received
+requests and outstanding responses so a reused connection handle cannot receive
+another session's reply. All BLE commands use the existing serialized dispatcher.
+
+Physical regression: generate `.sdk/python/luxio_pb2.py` from `Luxio/luxio.proto`,
+then run `.sdk/venv/bin/python tools/test-bluetooth.py --device-id <fingerprint>`.
+Use a dedicated test light. The test checks identity before changing output and
+restores the previous mode, brightness and power. It also checks Wi-Fi scanning,
+pairing payload access and reconnects. Build/test success alone does not qualify
+BLE pairing, offline startup, Wi-Fi provisioning or Matter interoperability on
+physical boards.
+
+## Optional strip power relay
+
+Build 27 adds `Config.relay` (`enabled`, `gpio`, `inverted`). It defaults to
+disabled, so existing controllers keep their current behavior. Enable Relay in
+mobile settings, choose its GPIO, and enable inversion only for an active-low
+relay. GL-C-016WL-D uses GPIO12 with inversion off. The relay follows power and
+Identify, stays on through an off fade, and allows 20 ms for power to settle
+before LED data. A disabled relay pin is released as an input after being driven
+inactive. Reserved pins and a shared relay/data GPIO are rejected.
+
+An omitted relay message in SET_CONFIG preserves the current relay configuration,
+so older clients can still edit other settings. To disable an existing relay,
+send an explicit relay message with enabled=false.
