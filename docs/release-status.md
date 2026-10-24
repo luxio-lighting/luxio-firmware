@@ -87,10 +87,15 @@ state reads. SSID/gateway/DNS were present after association and DHCP completed.
 The user's identity, Wi-Fi credentials and strip configuration were retained;
 its unsaved lighting preview was restored after the reboot tests. GPIO12 remains
 explicitly enabled on this test device, independently of the disabled default.
-Electrical relay output/visible LED operation still needs user confirmation.
+The user reported 24 V at the controller input but 0 V at its LED output under
+both relay polarities. A temporary diagnostic build confirmed GPIO12 output
+enable and GPIO routing, with the output register switching high/low as requested
+and its output disabled when Relay was disabled. The diagnostic build is not part
+of the release. The controller's power-path issue remains unresolved; settings and
+GPIO register checks alone do not establish visible LED operation.
 
 Host validation passes TypeScript checking, all 32 application tests and native
 protocol, storage, transition, packaging and target-layout tests. The ESP32 main
-image is 2,148,448 bytes; recovery is 1,102,608 bytes. Compiler stack checks pass.
+image is 2,148,464 bytes; recovery is 1,102,608 bytes. Compiler stack checks pass.
 Mobile checks include native Swift codec tests, an iOS settings save/reopen UI
 test, an iOS simulator build, and Android unit tests/debug APK build.
