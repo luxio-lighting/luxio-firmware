@@ -40,3 +40,8 @@ luxio.NetworkStatus.bssid max_size:18
 luxio.Response.animation_error max_size:160
 luxio.Script.preview max_count:8
 luxio.State.animation_preview max_count:8
+
+luxio.Request.script type:FT_POINTER
+luxio.Response.script type:FT_POINTER
+luxio.Request descriptorsize:DS_4
+luxio.Response descriptorsize:DS_4

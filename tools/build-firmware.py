@@ -40,7 +40,7 @@ for target in matrix:
             shutil.rmtree(source, ignore_errors=True)
             shutil.copytree(root / sketch, source)
             (source / 'partitions.csv').write_text(f"# Name,Type,SubType,Offset,Size,Flags\nnvs,data,nvs,0x9000,0x5000,\notadata,data,ota,0xe000,0x2000,\nloader,app,factory,0x10000,{target['recoverySize']:#x},\napp0,app,ota_0,{target['applicationAddress']:#x},{target['applicationSize']:#x},\nspiffs,data,spiffs,{target['minimumFlashSize']-0x50000:#x},0x40000,\ncoredump,data,coredump,{target['minimumFlashSize']-0x10000:#x},0x10000,\n")
-            flags = f'-DLUA_USE_C89 -fstack-usage -I{root}/Luxio/src/vendor/nanopb'
+            flags = f'-DLUA_USE_C89 -DPB_ENABLE_MALLOC -fstack-usage -I{root}/Luxio/src/vendor/nanopb'
             cpp = flags + f' -DLUXIO_BUILD={build} -DLUXIO_APP_CAPACITY={target["applicationSize"]} -DLUXIO_APP_OFFSET={target["applicationAddress"]} -DLUXIO_LOADER_CAPACITY={target["recoverySize"]} -DLUXIO_DEFAULT_GPIO={target["defaultGpio"]} -DLUXIO_MATTER={os.environ.get("LUXIO_MATTER", "1")} -DLUXIO_CLOUD_URL="{os.environ.get("LUXIO_CLOUD_URL", "https://api.luxio.lighting")}"'
             command = [cli, '--config-file', str(root / '.sdk/arduino-cli.yaml'), 'compile',
                        '--fqbn', target['fqbn'], '--jobs', os.environ.get('LUXIO_JOBS', '2'),

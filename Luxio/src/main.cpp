@@ -277,10 +277,13 @@ static bool listColors(pb_ostream_t *stream, const pb_field_t *field, void * con
   }
   return true;
 }
-size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
+size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t capacity) {
   xSemaphoreTake(stateMutex, portMAX_DELAY);
-  auto *request = new luxio_Request{};
-  auto *response = new luxio_Response{};
+  auto *request = new (std::nothrow) luxio_Request{};
+  auto *response = new (std::nothrow) luxio_Response{};
+  if (!request || !response) { delete request; delete response; xSemaphoreGive(stateMutex); return 0; }
+  std::unique_ptr<luxio_Script> responseScript;
+
   auto decoder = pb_istream_from_buffer(input, length);
   bool decoded = pb_decode(&decoder, luxio_Request_fields, request);
   response->id = request->id;
@@ -289,7 +292,12 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
   ScriptPage gradientPage{request->gradient_offset, &response->next_gradient_offset};
   ScriptPage colorPage{request->color_offset, &response->next_color_offset};
   if (!decoded) error = "Invalid Protobuf request";
-  else switch (request->operation) {
+  else if (request->operation == luxio_Operation_CREATE_SCRIPT || request->operation == luxio_Operation_UPDATE_SCRIPT ||
+      request->operation == luxio_Operation_GET_SCRIPT || request->operation == luxio_Operation_RUN_SCRIPT) {
+    responseScript.reset(new (std::nothrow) luxio_Script{});
+    if (!responseScript) error = "Not enough memory for this animation operation";
+  }
+  if (decoded && !error.length()) switch (request->operation) {
     case luxio_Operation_GET_STATE: break;
     case luxio_Operation_SET_COLOR: {
       auto &c = request->color;
@@ -364,7 +372,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
         uint8_t uuid[16]; esp_fill_random(uuid, 16); uuid[6] = (uuid[6] & 15) | 64; uuid[8] = (uuid[8] & 63) | 128;
         snprintf(gradient.id, sizeof(gradient.id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", uuid[0],uuid[1],uuid[2],uuid[3],uuid[4],uuid[5],uuid[6],uuid[7],uuid[8],uuid[9],uuid[10],uuid[11],uuid[12],uuid[13],uuid[14],uuid[15]);
       } else if (!validId(gradient.id) || !LittleFS.exists((String("/gradients/") + gradient.id + ".pb").c_str())) { error = "Gradient not found"; break; }
-      const size_t storedSize = encodeStoredGradient(gradient, output, 32768);
+      const size_t storedSize = encodeStoredGradient(gradient, output, capacity);
       if (!storedSize) { error = "Unable to encode gradient"; break; }
       if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 8192) { error = "Storage is full; delete a saved animation or gradient"; break; }
       String path = String("/gradients/") + gradient.id + ".pb";
@@ -415,7 +423,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
         uint8_t uuid[16]; esp_fill_random(uuid, 16); uuid[6] = (uuid[6] & 15) | 64; uuid[8] = (uuid[8] & 63) | 128;
         snprintf(saved_color.id, sizeof(saved_color.id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", uuid[0],uuid[1],uuid[2],uuid[3],uuid[4],uuid[5],uuid[6],uuid[7],uuid[8],uuid[9],uuid[10],uuid[11],uuid[12],uuid[13],uuid[14],uuid[15]);
       } else if (!validId(saved_color.id) || !LittleFS.exists((String("/colors/") + saved_color.id + ".pb").c_str())) { error = "Color not found"; break; }
-      const size_t storedSize = encodeStoredColor(saved_color, output, 32768);
+      const size_t storedSize = encodeStoredColor(saved_color, output, capacity);
       if (!storedSize) { error = "Unable to encode color"; break; }
       if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 8192) { error = "Storage is full; delete a saved animation or color"; break; }
       String path = String("/colors/") + saved_color.id + ".pb";
@@ -460,11 +468,12 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
     case luxio_Operation_LIST_SCRIPTS: response->scripts.funcs.encode = listScripts; response->scripts.arg = &page; break;
     case luxio_Operation_CREATE_SCRIPT:
     case luxio_Operation_UPDATE_SCRIPT: {
-      auto &script = request->script;
+      if (!request->script) { error = "Animation name and source are required"; break; }
+      auto &script = *request->script;
       if (script.mode != luxio_Mode_COLOR && script.mode != luxio_Mode_ANIMATION) { error = "Use gradient commands for gradients"; break; }
       // Legacy clients omit mode; their scripts retain animation behavior.
       if (script.mode == luxio_Mode_COLOR) script.mode = luxio_Mode_ANIMATION;
-      if (!request->has_script || !strlen(script.name) || !strlen(script.source)) { error = "Animation name and source are required"; break; }
+      if (!bool(request->script) || !strlen(script.name) || !strlen(script.source)) { error = "Animation name and source are required"; break; }
       if (request->operation == luxio_Operation_CREATE_SCRIPT) {
         uint8_t uuid[16]; esp_fill_random(uuid, 16); uuid[6] = (uuid[6] & 15) | 64; uuid[8] = (uuid[8] & 63) | 128;
         snprintf(script.id, sizeof(script.id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", uuid[0],uuid[1],uuid[2],uuid[3],uuid[4],uuid[5],uuid[6],uuid[7],uuid[8],uuid[9],uuid[10],uuid[11],uuid[12],uuid[13],uuid[14],uuid[15]);
@@ -475,7 +484,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       if (!parameterError) parameterError = parseAnimationPreview(script.source, script.preview, script.preview_count);
       if (parameterError) { error = parameterError; break; }
       script.parameters_count = count; memcpy(script.parameters, parameters.get(), sizeof(script.parameters));
-      const size_t storedSize = encodeStoredScript(script, output, 32768);
+      const size_t storedSize = encodeStoredScript(script, output, capacity);
       if (!storedSize) { error = "Unable to encode animation"; break; }
       // LittleFS needs free blocks for atomic replacement and metadata updates.
       if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 8192) { error = "Storage is full; delete a saved color, gradient, or animation"; break; }
@@ -486,17 +495,17 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
       // Verify the actual stored bytes before replacing an existing script.
       File verify = LittleFS.open("/scripts/pending", "r");
       written = written && verify && verify.size() == storedSize && verify.read(output, storedSize) == storedSize &&
-        decodeStoredScript(output, storedSize, response->script) && !strcmp(response->script.source, script.source) &&
-        !strcmp(response->script.id, script.id) && !strcmp(response->script.name, script.name) && response->script.mode == script.mode && response->script.preview_count == script.preview_count && !memcmp(response->script.preview, script.preview, script.preview_count * sizeof(luxio_Color)) && response->script.parameters_count == script.parameters_count && !memcmp(response->script.parameters, script.parameters, sizeof(script.parameters));
+        decodeStoredScript(output, storedSize, *responseScript) && !strcmp(responseScript->source, script.source) &&
+        !strcmp(responseScript->id, script.id) && !strcmp(responseScript->name, script.name) && responseScript->mode == script.mode && responseScript->preview_count == script.preview_count && !memcmp(responseScript->preview, script.preview, script.preview_count * sizeof(luxio_Color)) && responseScript->parameters_count == script.parameters_count && !memcmp(responseScript->parameters, script.parameters, sizeof(script.parameters));
       verify.close();
       if (!written || !LittleFS.rename("/scripts/pending", path)) { LittleFS.remove("/scripts/pending"); error = "Unable to save animation (storage full or write failed)"; break; }
-      response->has_script = true; response->script = script; break;
+      *responseScript = script; response->script = responseScript.get(); break;
     }
     case luxio_Operation_GET_SCRIPT:
       if (!request->script_id[0]) {
         if (!animation || !activeAnimationSource || state.mode != luxio_Mode_ANIMATION) { error = "No animation is running"; break; }
-        response->has_script = true;
-        auto &script = response->script;
+        response->script = responseScript.get();
+        auto &script = *responseScript;
         strlcpy(script.id, state.active_script_id, sizeof(script.id));
         strlcpy(script.name, state.script_name, sizeof(script.name));
         strlcpy(script.source, activeAnimationSource, sizeof(script.source));
@@ -516,38 +525,38 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
         if (!LittleFS.remove(path)) error = "Unable to delete animation"; break;
       }
       File file = LittleFS.open(path, "r"); size_t size = file.size();
-      if (!size || size > SCRIPT_RECORD_MAX || file.read(output, size) != size) { error = "Unable to read animation"; break; }
-      if (!decodeStoredScript(output, size, response->script)) { error = "Invalid saved animation"; break; }
-      if (request->operation == luxio_Operation_GET_SCRIPT) response->has_script = true;
+      if (!size || size > SCRIPT_RECORD_MAX || size > capacity || file.read(output, size) != size) { error = "Unable to read animation"; break; }
+      if (!decodeStoredScript(output, size, *responseScript)) { error = "Invalid saved animation"; break; }
+      if (request->operation == luxio_Operation_GET_SCRIPT) response->script = responseScript.get();
       else {
-        if (response->script.mode == luxio_Mode_GRADIENT) { error = "Legacy Lua gradient: migrate it to gradient storage"; break; }
-        error = startAnimation(response->script);
+        if (responseScript->mode == luxio_Mode_GRADIENT) { error = "Legacy Lua gradient: migrate it to gradient storage"; break; }
+        error = startAnimation(*responseScript);
         if (!error.length()) {
           state.on = true; dirty = true;
           strlcpy(state.active_script_id, request->script_id, sizeof(state.active_script_id));
           state.mode = luxio_Mode_ANIMATION;
-          strlcpy(state.script_name, response->script.name, sizeof(state.script_name));
+          strlcpy(state.script_name, responseScript->name, sizeof(state.script_name));
         } else if (!animation) { applyColor(); }
-        memset(&response->script, 0, sizeof(response->script));
+        response->script = nullptr;
       }
       break;
     }
     case luxio_Operation_SET_ANIMATION_PARAMETERS: {
       if (!animation || state.mode != luxio_Mode_ANIMATION) { error = "No animation is running"; break; }
-      if ((!request->script_id[0] && (!request->has_script || !request->script.name[0])) ||
+      if ((!request->script_id[0] && (!bool(request->script) || !request->script->name[0])) ||
           (request->script_id[0] && strcmp(request->script_id, state.active_script_id)) ||
-          (request->has_script && request->script.name[0] && strcmp(request->script.name, state.script_name))) { error = "The active animation changed"; break; }
+          (bool(request->script) && request->script->name[0] && strcmp(request->script->name, state.script_name))) { error = "The active animation changed"; break; }
       const char *parameterError = updateAnimationParameters(state.parameters, state.parameters_count, request->parameters, request->parameters_count);
       if (parameterError) error = parameterError;
       break;
     }
     case luxio_Operation_SET_SCRIPT:
-      if (!request->has_script || !request->script.source[0] || (request->script.mode != luxio_Mode_COLOR && request->script.mode != luxio_Mode_ANIMATION)) { error = "Provide animation Lua source"; break; }
-      error = startAnimation(request->script);
-      if (!error.length()) { state.on = true; state.mode = luxio_Mode_ANIMATION; strlcpy(state.script_name, request->script.name, sizeof(state.script_name)); }
+      if (!bool(request->script) || !request->script->source[0] || (request->script->mode != luxio_Mode_COLOR && request->script->mode != luxio_Mode_ANIMATION)) { error = "Provide animation Lua source"; break; }
+      error = startAnimation(*request->script);
+      if (!error.length()) { state.on = true; state.mode = luxio_Mode_ANIMATION; strlcpy(state.script_name, request->script->name, sizeof(state.script_name)); }
       else if (!animation) applyColor();
       break;
-    case luxio_Operation_STOP_SCRIPT: if (request->has_script && request->script.name[0] && strcmp(request->script.name, state.script_name)) break; if (state.mode == luxio_Mode_ANIMATION) { stopAnimation(); applyColor(); dirty = true; } break;
+    case luxio_Operation_STOP_SCRIPT: if (bool(request->script) && request->script->name[0] && strcmp(request->script->name, state.script_name)) break; if (state.mode == luxio_Mode_ANIMATION) { stopAnimation(); applyColor(); dirty = true; } break;
     case luxio_Operation_GET_PAIRING_CODE:
       if (!pairingCode.length()) error = "Matter is not ready";
       else { strlcpy(response->pairing_code, pairingCode.c_str(), sizeof(response->pairing_code)); strlcpy(response->pairing_qr, pairingQr.c_str(), sizeof(response->pairing_qr)); }
@@ -570,7 +579,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
         if (!persistent->active_gradient_id[0]) persistent->has_gradient = false;
         if (!persistent->active_script_id[0]) persistent->script_name[0] = 0;
         if (!persistent->active_gradient_id[0] && !persistent->active_script_id[0]) persistent->mode = luxio_Mode_COLOR;
-        auto saved = pb_ostream_from_buffer(output, 32768);
+        auto saved = pb_ostream_from_buffer(output, capacity);
         if (!pb_encode(&saved, luxio_State_fields, persistent.get()) || prefs.putBytes("state", output, saved.bytes_written) != saved.bytes_written) error = "Unable to save device settings";
         else if (prefs.putBytes("ota-job", &availableUpdate, sizeof(availableUpdate)) != sizeof(availableUpdate)) error = "Unable to save update request";
         else if (esp_ota_set_boot_partition(loader) != ESP_OK) { prefs.remove("ota-job"); error = "Unable to select recovery loader"; }
@@ -608,18 +617,24 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
   }
   if (error.length()) strlcpy(response->error, error.c_str(), sizeof(response->error));
   else { response->has_state = true; response->state = state; strlcpy(response->state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(response->state.lan_ip)); }
-  auto encoder = pb_ostream_from_buffer(output, 32768);
+  auto encoder = pb_ostream_from_buffer(output, capacity);
   size_t size = pb_encode(&encoder, luxio_Response_fields, response) ? encoder.bytes_written : 0;
   if (!size) {
     memset(response, 0, sizeof(*response));
     response->id = request->id;
-    strlcpy(response->error, "Unable to read saved animations", sizeof(response->error));
-    encoder = pb_ostream_from_buffer(output, 32768);
+    strlcpy(response->error, "Response exceeds available memory or saved data is invalid", sizeof(response->error));
+    encoder = pb_ostream_from_buffer(output, capacity);
     size = pb_encode(&encoder, luxio_Response_fields, response) ? encoder.bytes_written : 0;
   }
+  pb_release(luxio_Request_fields, request);
   delete request; delete response;
   xSemaphoreGive(stateMutex);
   return size;
+}
+
+// Existing BLE transports provide a full-size output buffer.
+size_t dispatch(const uint8_t *input, size_t length, uint8_t *output) {
+  return dispatch(input, length, output, 32768);
 }
 
 static esp_err_t httpHandler(httpd_req_t *request) {
@@ -630,14 +645,16 @@ static esp_err_t httpHandler(httpd_req_t *request) {
   httpd_resp_set_hdr(request, "Cache-Control", "no-store");
   if (request->method == HTTP_OPTIONS) { httpd_resp_set_status(request, "204 No Content"); return httpd_resp_send(request, nullptr, 0); }
   if (request->content_len > 32768 || request->content_len < 1) return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid message size");
-  auto *input = new uint8_t[request->content_len]; auto *output = new uint8_t[32768];
+  const size_t capacity = (psramFound() || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= 65536) ? 32768 : 8192;
+  auto *input = new (std::nothrow) uint8_t[request->content_len]; auto *output = new (std::nothrow) uint8_t[capacity];
+  if (!input || !output) { delete[] input; delete[] output; httpd_resp_set_status(request, "503 Service Unavailable"); return httpd_resp_send(request, "Not enough memory", HTTPD_RESP_USE_STRLEN); }
   size_t received = 0;
   while (received < request->content_len) {
     int size = httpd_req_recv(request, reinterpret_cast<char *>(input + received), request->content_len - received);
     if (size <= 0) { delete[] input; delete[] output; return ESP_FAIL; }
     received += size;
   }
-  size_t length = dispatch(input, received, output);
+  size_t length = dispatch(input, received, output, capacity);
   httpd_resp_set_type(request, "application/x-protobuf");
   auto result = httpd_resp_send(request, reinterpret_cast<char *>(output), length);
   delete[] input; delete[] output; return result;
@@ -646,9 +663,11 @@ static esp_err_t websocketHandler(httpd_req_t *request) {
   if (request->method == HTTP_GET) return ESP_OK;
   httpd_ws_frame_t packet = {};
   if (httpd_ws_recv_frame(request, &packet, 0) != ESP_OK || packet.len > 32768 || packet.type != HTTPD_WS_TYPE_BINARY) return ESP_FAIL;
-  auto *input = new uint8_t[packet.len]; auto *output = new uint8_t[32768]; packet.payload = input;
+  const size_t capacity = (psramFound() || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= 65536) ? 32768 : 8192;
+  auto *input = new (std::nothrow) uint8_t[packet.len]; auto *output = new (std::nothrow) uint8_t[capacity]; packet.payload = input;
+  if (!input || !output) { delete[] input; delete[] output; return ESP_ERR_NO_MEM; }
   if (httpd_ws_recv_frame(request, &packet, packet.len) != ESP_OK) { delete[] input; delete[] output; return ESP_FAIL; }
-  size_t length = dispatch(input, packet.len, output);
+  size_t length = dispatch(input, packet.len, output, capacity);
   packet.payload = output; packet.len = length;
   auto result = httpd_ws_send_frame(request, &packet);
   delete[] input; delete[] output; return result;
@@ -917,10 +936,9 @@ void loop() {
       xSemaphoreGive(stateMutex); advertisedIp = WiFi.localIP();
     }
   } else if (WiFi.status() != WL_CONNECTED) advertisedIp = IPAddress();
-  static uint8_t *input = new uint8_t[32768];
-  static uint8_t *output = new uint8_t[32768];
+  static std::unique_ptr<uint8_t[]> input;
   static uint32_t expected = 0, received = 0, header = 0, lastByte = 0;
-  if (header && millis() - lastByte > 3000) { received = 0; expected = 0; header = 0; }
+  if (header && millis() - lastByte > 3000) { input.reset(); received = 0; expected = 0; header = 0; }
   static Stream *controlPort = &Serial;
 #if ARDUINO_USB_CDC_ON_BOOT
   // Keep a complete frame on its original transport; switch only between requests.
@@ -935,14 +953,20 @@ void loop() {
     }
     if (header < 8) {
       expected = (expected << 8) | byte; header++;
-      if (header == 8 && (!expected || expected > 32768)) { expected = 0; header = 0; received = 0; }
+      if (header == 8) {
+        if (expected && expected <= 32768) input.reset(new (std::nothrow) uint8_t[expected]);
+        if (!expected || expected > 32768 || !input) { input.reset(); expected = 0; header = 0; received = 0; }
+      }
       continue;
     }
     input[received++] = byte;
     if (received == expected) {
-      size_t length = dispatch(input, received, output);
+      const size_t capacity = (psramFound() || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= 65536) ? 32768 : 8192;
+      std::unique_ptr<uint8_t[]> output(new (std::nothrow) uint8_t[capacity]);
+      size_t length = output ? dispatch(input.get(), received, output.get(), capacity) : 0;
       uint8_t prefix[8] = {0x4c, 0x58, 0x50, 0x31, uint8_t(length >> 24), uint8_t(length >> 16), uint8_t(length >> 8), uint8_t(length)};
-      controlPort->write(prefix, 8); controlPort->write(output, length);
+      controlPort->write(prefix, 8); if (length) controlPort->write(output.get(), length);
+      input.reset();
       received = 0; expected = 0; header = 0;
     }
   }
@@ -965,8 +989,9 @@ void loop() {
       if (!persistent->active_gradient_id[0]) persistent->has_gradient = false;
       if (!persistent->active_script_id[0]) persistent->script_name[0] = 0;
       if (!persistent->active_gradient_id[0] && !persistent->active_script_id[0]) persistent->mode = luxio_Mode_COLOR;
-      auto encoder = pb_ostream_from_buffer(output, 32768);
-      if (pb_encode(&encoder, luxio_State_fields, persistent.get())) prefs.putBytes("state", output, encoder.bytes_written);
+      std::unique_ptr<uint8_t[]> saved(new (std::nothrow) uint8_t[luxio_State_size]);
+      auto encoder = pb_ostream_from_buffer(saved.get(), saved ? luxio_State_size : 0);
+      if (saved && pb_encode(&encoder, luxio_State_fields, persistent.get())) prefs.putBytes("state", saved.get(), encoder.bytes_written);
       lastSave = millis(); dirty = false;
     }
     if (wifiScanning) {
@@ -1022,17 +1047,24 @@ void loop() {
   static uint8_t previousDigest[32] = {};
   if (millis() - lastBroadcast >= 250) {
     lastBroadcast = millis();
-    auto *event = new luxio_Response{};
+    size_t count = 8; int clients[8]; bool subscribed = false;
+    if (httpd_get_client_list(httpServer, &count, clients) == ESP_OK)
+      for (size_t i = 0; i < count; i++) if (httpd_ws_get_fd_info(httpServer, clients[i]) == HTTPD_WS_CLIENT_WEBSOCKET) subscribed = true;
+    if (!subscribed) { delay(1); return; }
+    auto *event = new (std::nothrow) luxio_Response{};
+    if (!event) { delay(1); return; }
     xSemaphoreTake(stateMutex, portMAX_DELAY); event->has_state = true; event->state = state; xSemaphoreGive(stateMutex);
     strlcpy(event->state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(event->state.lan_ip));
-    static uint8_t bytes[4096]; auto encoder = pb_ostream_from_buffer(bytes, sizeof(bytes));
+    std::unique_ptr<uint8_t[]> bytes(new (std::nothrow) uint8_t[8192]);
+    if (!bytes) { delete event; delay(1); return; }
+    auto encoder = pb_ostream_from_buffer(bytes.get(), 8192);
     if (pb_encode(&encoder, luxio_Response_fields, event)) {
-      uint8_t digest[32]; mbedtls_sha256(bytes, encoder.bytes_written, digest, 0);
+      uint8_t digest[32]; mbedtls_sha256(bytes.get(), encoder.bytes_written, digest, 0);
       if (memcmp(digest, previousDigest, 32)) {
         memcpy(previousDigest, digest, 32);
         size_t count = 8; int clients[8];
         if (httpd_get_client_list(httpServer, &count, clients) == ESP_OK) {
-          httpd_ws_frame_t packet = {}; packet.type = HTTPD_WS_TYPE_BINARY; packet.payload = bytes; packet.len = encoder.bytes_written;
+          httpd_ws_frame_t packet = {}; packet.type = HTTPD_WS_TYPE_BINARY; packet.payload = bytes.get(); packet.len = encoder.bytes_written;
           for (size_t i = 0; i < count; i++) if (httpd_ws_get_fd_info(httpServer, clients[i]) == HTTPD_WS_CLIENT_WEBSOCKET) httpd_ws_send_frame_async(httpServer, clients[i], &packet);
         }
       }
