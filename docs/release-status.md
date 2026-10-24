@@ -323,4 +323,16 @@ The GLEDOPTO runs production application/recovery build 32 and its original
 60-LED Knight Rider animation, brightness, power and GPIO18 relay configuration
 were restored. The production 100-LED memory check encountered an HTTP 302
 redirect to HTTPS after the API deployment; this is a proxy configuration block,
-not a TLS allocation failure. The server owner is correcting HTTP routing.
+not a TLS allocation failure. The server owner corrected HTTP routing, and the
+final production verification passed: HTTP metadata and binary downloads return
+200 for all five chips; every manifest signature and application hash matches.
+Both announcement POST routes reach API validation directly without redirects.
+
+The GLEDOPTO then passed 30 production HTTP update checks with Knight Rider
+running at 100 LEDs, 227 concurrent HTTP polls and 227 WebSocket replies. There
+were no update or animation errors. The lowest sampled internal free heap was
+49,708 bytes (48.5 KiB), with a 32,756-byte largest block. The build-30 HTTPS test
+previously sampled 6,876 bytes free and a 4,340-byte largest block under the same
+100-LED animation/polling workload. These are sampled observations, not a
+continuous minimum-heap guarantee. The test restored the original 60 LEDs and
+verified that Knight Rider remains active without update/animation errors.
