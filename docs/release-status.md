@@ -160,3 +160,59 @@ Build 28 was published on channel 0 by workflow run 40130627866 from commit
 succeeded. Independent production API checks downloaded all 25 parts and verified
 build/channel/target, sizes, SHA-256 hashes, embedded chip IDs and flash offsets.
 Setup and API target snapshots were synchronized; partition layouts are unchanged.
+
+## Build 29 native RMT and Wi-Fi-gated Matter (2026-10-24, unpublished)
+
+Matter eligibility retains build 28's PSRAM policy. Eligible devices now create
+and start the endpoint only after Wi-Fi is connected and has an IP address.
+Initialization happens once per boot in the cloud worker, before HTTPS work;
+reconnections do not recreate the endpoint. Pairing-code reads while offline
+report that Wi-Fi is required. Local controls and recovery acknowledgment do not
+wait for Matter or a network connection.
+
+LED transmission now uses ESP-IDF's RMT byte encoder directly. This removes the
+Arduino RMT wrapper from the output path and replaces the 160-byte-per-LED symbol
+buffer with a five-byte-per-LED internal-RAM payload. RGB/RGBW/RGBCCT byte order,
+bit timings, end level and the 600 us low reset interval are preserved. The payload
+is retained until transmission finishes; configuration changes occur under the
+same state mutex. At 100 LEDs, color/fade and transmission buffers total 2,300
+bytes instead of 17,804 bytes, excluding fixed driver overhead. Other Arduino
+APIs and the pinned precompiled TLS configuration remain in use.
+
+Testing also reproduced an existing Cyberpunk animation wall-clock timeout on
+released build 28 during HTTPS work. Lua now checkpoints the task runtime counter
+at instruction hooks and enforces 30 ms startup / 20 ms frame CPU budgets rather
+than charging time preempted by other tasks. The instruction and memory ceilings
+remain unchanged. The SDK must provide microsecond task runtime statistics, as
+all five pinned target profiles do. The cloud worker retains its original priority.
+
+Validation: TypeScript and all host/native tests pass. A new harness executes the
+production render function, Matter startup prefix and Lua hook with fake hardware:
+1/60/100/1024 LEDs, all three channel layouts, relay power, reset timing, offline
+startup, association without an IP, reconnection without duplicate startup,
+Matter-disabled builds/devices, CPU-counter rollover and instruction exhaustion.
+All five final targets compile and pass image, layout and compiler stack checks:
+
+| Chip | Main bytes | Recovery bytes |
+| --- | --- | --- |
+| esp32 | 2,163,648 | 1,117,152 |
+| esp32s3 | 2,294,864 | 1,100,656 |
+| esp32c3 | 2,351,488 | 1,180,768 |
+| esp32c5 | 3,021,808 | 1,239,648 |
+| esp32c6 | 2,991,872 | 1,186,960 |
+
+The GLEDOPTO received the candidate application only; identity, Wi-Fi and saved
+storage were preserved. Three gradient/HTTPS rounds and LED count 60 → 100 → 60
+passed. The captured Cyberpunk source was restored and remained running through
+an update check with CPU accounting, although concurrent state polling briefly
+received HTTP 503 under memory pressure. The app subsequently selected Knight
+Rider at brightness 4; tests respected that newer selection. Two further HTTPS
+checks passed while Knight Rider ran, but the third returned a TLS allocation
+error. These results do not qualify fully concurrent animation/app/TLS operation.
+Visual LED operation could not be checked by the user, and actual deferred Matter
+startup on a PSRAM-equipped board remains unqualified.
+
+Build 29 is committed for further qualification but is not published to the API.
+The public channel remains on build 28. Additional TLS/request-memory work is
+required before publishing this candidate; the RMT saving alone does not resolve
+all no-PSRAM concurrency limits.

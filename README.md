@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Fir
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=28 tools/build-firmware.sh all
+LUXIO_BUILD=29 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=28 tools/build-firmware.sh esp32
+LUXIO_BUILD=29 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -38,8 +38,12 @@ All public target binaries include Matter, but startup enables it only when usab
 PSRAM is detected with at least 2 MiB total and 1 MiB free after the LED frames are
 allocated. This is a conservative Luxio policy, not a universal Matter hardware
 minimum. It is based on detected memory, not the CPU architecture or chip family.
-The decision is made at boot; changing the LED count does not start or stop Matter
-until the next boot. Boards without usable PSRAM retain Luxio controls and updates.
+Eligibility is decided at boot; changing the LED count does not start or stop
+Matter until the next boot. Eligible devices initialize Matter once Wi-Fi is
+connected and has an IP address. Initialization runs in the cloud worker before
+HTTPS requests, avoiding simultaneous startup/handshake allocations. Reconnection
+does not recreate Matter; a temporary Wi-Fi loss does not shut down an existing
+Matter instance. Offline USB/BLE controls remain available on their supported targets. Boards without usable PSRAM retain Luxio controls and updates.
 Skipping initialization saves runtime allocations but cannot reclaim Matter's
 linked static RAM. Physical Matter qualification with this policy remains pending.
 
@@ -101,6 +105,26 @@ Hardware tests live in `tools/` and are opt-in. For recovery testing, use `TARGE
 Project design notes and historical test records are retained in [docs/project](docs/project/repositories.md).
 
 Build 13 stores colors, native gradients, and compressed Lua animations in separate directories within the existing 256 KiB filesystem. Client-supplied live content stays in RAM. There is no fixed item-count cap. See [native resources](docs/native-resources.md) for the API and [animation storage](docs/script-storage.md) for compatibility, pagination, capacity measurements and tests.
+
+## LED output memory (build 29)
+
+LED output uses ESP-IDF's RMT byte encoder directly instead of Arduino's expanded
+symbol buffer. The ISR reads a small internal-RAM payload of at most five bytes
+per LED, with the same channel order, bit timing and 600 microsecond low reset
+interval. Transmissions complete before the payload is reused or resized.
+The peripheral's fixed symbol memory is separate from this byte buffer.
+
+Together with the three six-byte color/fade frames, buffers use 23 bytes per LED:
+2,300 bytes for 100 LEDs, versus 17,804 bytes in build 28. This saves 15,504 bytes
+of payload/frame allocations at that count, before driver overhead. Allocations
+grow with the configured count; shrinking releases capacity on reboot. The RMT
+payload stays in internal RAM for ISR access; color/fade frames prefer PSRAM.
+Arduino remains for APIs where replacing the wrapper has no demonstrated RAM
+benefit. The precompiled TLS library configuration is unchanged.
+
+Lua execution uses the task's CPU runtime counter for its 30 ms startup and 20 ms
+frame budgets. Time preempted by other tasks does not consume that budget. The
+100,000-instruction and 128 KiB VM limits remain enforced.
 
 ## Power and brightness (build 11)
 

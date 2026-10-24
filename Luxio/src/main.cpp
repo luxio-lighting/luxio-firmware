@@ -20,6 +20,7 @@
 #include <esp_http_server.h>
 #include <esp_ota_ops.h>
 #include <driver/gpio.h>
+#include <driver/rmt_tx.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/platform.h>
 #include <mbedtls/sha256.h>
@@ -67,8 +68,10 @@ static uint8_t (*pixels)[6]; // One allocation contains target, displayed and fa
 static uint32_t frameCapacity;
 static std::unique_ptr<OutputTransition> transition;
 static bool identifyActive = false;
-static rmt_data_t *symbols;
-static size_t symbolCapacity;
+static uint8_t *ledBytes;
+static size_t ledByteCapacity;
+static rmt_channel_handle_t ledChannel;
+static rmt_encoder_handle_t ledEncoder;
 static int activeRelayGpio = -1;
 static bool activeRelayInverted, relayPowered;
 #ifndef LUXIO_DEFAULT_GPIO
@@ -134,16 +137,16 @@ static void render() {
     // WS2805: R,G,B,W1(warm),W2(cool); WS2814: R,G,B,W; WS2812: G,R,B.
     const int order[5] = {channels == 3 ? 1 : 0, channels == 3 ? 0 : 1, 2, rgbcct ? 4 : 3, 5};
     for (int c = 0; c < channels; c++) {
-      uint8_t value = transition->displayed[i][order[c]];
-      for (int bit = 7; bit >= 0; bit--) {
-        auto &symbol = symbols[position++];
-        symbol.level0 = 1; symbol.duration0 = value & (1 << bit) ? 8 : 3;
-        symbol.level1 = 0; symbol.duration1 = value & (1 << bit) ? 4 : 9;
-      }
+      ledBytes[position++] = transition->displayed[i][order[c]];
     }
   }
-  symbols[position++] = {.duration0 = 3000, .level0 = 0, .duration1 = 3000, .level1 = 0};
-  rmtWrite(state.config.gpio, symbols, position, 100);
+  // Encode bytes into the peripheral's small symbol memory while transmitting.
+  // Keep the payload alive and unchanged until the transaction has finished.
+  rmt_transmit_config_t transmit = {};
+  ESP_ERROR_CHECK(rmt_transmit(ledChannel, ledEncoder, ledBytes, position, &transmit));
+  ESP_ERROR_CHECK(rmt_tx_wait_all_done(ledChannel, 100));
+  // EOT holds the output low. Preserve the previous 600 us reset/latch interval.
+  delayMicroseconds(600);
 }
 static void applyColor() {
   transition->begin(millis());
@@ -167,7 +170,11 @@ static void *luaAllocator(void *, void *ptr, size_t oldSize, size_t newSize) {
 static void luaHook(lua_State *L, lua_Debug *) {
   luaInstructions -= 1000;
   if (luaInstructions <= 0) luaL_error(L, "Animation exceeded its instruction budget");
-  if (int32_t(millis() - luaDeadline) > 0) luaL_error(L, "Animation exceeded its time budget");
+  // Account for this task's CPU time, not time spent preempted by Wi-Fi/TLS.
+  // A yield checkpoints the current running interval in FreeRTOS's counter.
+  taskYIELD(); TaskStatus_t current;
+  vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
+  if (int32_t(uint32_t(current.ulRunTimeCounter) - luaDeadline) > 0) luaL_error(L, "Animation exceeded its CPU time budget");
 }
 static String startAnimation(const luxio_Script &script) {
   auto parameters = std::make_unique<luxio_AnimationParameter[]>(16); pb_size_t count = 0;
@@ -221,7 +228,10 @@ static String startAnimation(const luxio_Script &script) {
     }
     return luaL_error(L, "Unknown animation parameter: %s", name);
   }); lua_setglobal(L, "luxio_get_parameter");
-  luaInstructions = 100000; luaDeadline = millis() + 30;
+  luaInstructions = 100000;
+  taskYIELD(); TaskStatus_t current;
+  vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
+  luaDeadline = uint32_t(current.ulRunTimeCounter) + 30000;
   lua_sethook(L, luaHook, LUA_MASKCOUNT, 1000);
   transition->begin(millis());
   animationStarted = millis(); memset(pixels, 0, frameCapacity * 6);
@@ -371,11 +381,11 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
 #endif
       }
       if (error.length()) break;
-      size_t needed = (c.led_count * 40 + 1) * sizeof(rmt_data_t);
-      if (needed > symbolCapacity) {
-        auto *replacement = static_cast<rmt_data_t *>(psramFound() ? ps_realloc(symbols, needed) : realloc(symbols, needed));
+      size_t needed = c.led_count * 5;
+      if (needed > ledByteCapacity) {
+        auto *replacement = static_cast<uint8_t *>(heap_caps_realloc(ledBytes, needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         if (!replacement) { error = "Not enough memory for this LED count"; break; }
-        symbols = replacement; symbolCapacity = needed;
+        ledBytes = replacement; ledByteCapacity = needed;
       }
       if (c.led_count > frameCapacity) {
         auto *replacement = static_cast<uint8_t (*)[6]>(psramFound() ? ps_calloc(c.led_count * 3, 6) : calloc(c.led_count * 3, 6));
@@ -386,13 +396,20 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
         free(pixels); pixels = replacement; frameCapacity = c.led_count;
         transition->displayed = pixels + frameCapacity; transition->origin = pixels + frameCapacity * 2; transition->capacity = frameCapacity;
       }
+      if (c.gpio != state.config.gpio) {
+        rmt_tx_channel_config_t channel = {};
+        channel.gpio_num = gpio_num_t(c.gpio); channel.clk_src = RMT_CLK_SRC_DEFAULT;
+        channel.resolution_hz = 10000000; channel.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
+        channel.trans_queue_depth = 1;
+        rmt_channel_handle_t replacement = nullptr;
+        if (rmt_new_tx_channel(&channel, &replacement) != ESP_OK) { error = "Unable to initialize this GPIO"; break; }
+        if (rmt_enable(replacement) != ESP_OK) { rmt_del_channel(replacement); error = "Unable to enable this GPIO"; break; }
+        ESP_ERROR_CHECK(rmt_disable(ledChannel)); ESP_ERROR_CHECK(rmt_del_channel(ledChannel));
+        ledChannel = replacement;
+      }
       if (activeRelayGpio >= 0 && (!c.relay.enabled || int(c.relay.gpio) != activeRelayGpio || c.relay.inverted != activeRelayInverted)) {
         digitalWrite(activeRelayGpio, activeRelayInverted ? HIGH : LOW);
         pinMode(activeRelayGpio, INPUT); activeRelayGpio = -1; relayPowered = false;
-      }
-      if (c.gpio != state.config.gpio) {
-        if (!rmtInit(c.gpio, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000)) { error = "Unable to initialize this GPIO"; break; }
-        rmtDeinit(state.config.gpio);
       }
       if (c.gpio != state.config.gpio || c.led_count != state.config.led_count || strcmp(c.strip_type, state.config.strip_type)) { stopAnimation(); state.color = {}; memset(pixels, 0, frameCapacity * 6); memset(transition->displayed, 0, frameCapacity * 6); transition->active = false; }
       state.config = c; strlcpy(state.config.name, name.c_str(), sizeof(state.config.name)); dirty = true;
@@ -615,6 +632,7 @@ size_t dispatch(const uint8_t *input, size_t length, uint8_t *output, size_t cap
     case luxio_Operation_STOP_SCRIPT: if (bool(request->script) && request->script->name[0] && strcmp(request->script->name, state.script_name)) break; if (state.mode == luxio_Mode_ANIMATION) { stopAnimation(); applyColor(); dirty = true; } break;
     case luxio_Operation_GET_PAIRING_CODE:
       if (state.matter_disabled) error = "Matter is unavailable on this device";
+      else if (WiFi.status() != WL_CONNECTED) error = "Connect to Wi-Fi before using Matter";
       else if (!pairingCode.length()) error = "Matter is not ready";
       else { strlcpy(response->pairing_code, pairingCode.c_str(), sizeof(response->pairing_code)); strlcpy(response->pairing_qr, pairingQr.c_str(), sizeof(response->pairing_qr)); }
       break;
@@ -740,10 +758,101 @@ static esp_err_t websocketHandler(httpd_req_t *request) {
   auto result = httpd_ws_send_frame(request, &packet);
   delete[] input; delete[] output; return result;
 }
+#if LUXIO_MATTER
+static MatterEnhancedColorLight matterLight;
+// Basic Information reads these strings from the provider, not writable
+// attributes. Delegate all other factory data to the SDK's active provider.
+static class LuxioDeviceInfo : public chip::DeviceLayer::DeviceInstanceInfoProvider {
+public:
+  chip::DeviceLayer::DeviceInstanceInfoProvider *original = nullptr;
+  CHIP_ERROR GetVendorName(char *buffer, size_t size) override {
+    if (size < sizeof("Luxio Lighting")) return CHIP_ERROR_BUFFER_TOO_SMALL;
+    memcpy(buffer, "Luxio Lighting", sizeof("Luxio Lighting"));
+    return CHIP_NO_ERROR;
+  }
+  CHIP_ERROR GetProductName(char *buffer, size_t size) override {
+    if (size < sizeof("DIY")) return CHIP_ERROR_BUFFER_TOO_SMALL;
+    memcpy(buffer, "DIY", sizeof("DIY"));
+    return CHIP_NO_ERROR;
+  }
+  CHIP_ERROR GetVendorId(uint16_t &value) override { return original->GetVendorId(value); }
+  CHIP_ERROR GetProductId(uint16_t &value) override { return original->GetProductId(value); }
+  CHIP_ERROR GetPartNumber(char *buffer, size_t size) override { return original->GetPartNumber(buffer, size); }
+  CHIP_ERROR GetProductURL(char *buffer, size_t size) override { return original->GetProductURL(buffer, size); }
+  CHIP_ERROR GetProductLabel(char *buffer, size_t size) override { return original->GetProductLabel(buffer, size); }
+  CHIP_ERROR GetSerialNumber(char *buffer, size_t size) override { return original->GetSerialNumber(buffer, size); }
+  CHIP_ERROR GetManufacturingDate(uint16_t &year, uint8_t &month, uint8_t &day) override { return original->GetManufacturingDate(year, month, day); }
+  CHIP_ERROR GetHardwareVersion(uint16_t &value) override { return original->GetHardwareVersion(value); }
+  CHIP_ERROR GetHardwareVersionString(char *buffer, size_t size) override { return original->GetHardwareVersionString(buffer, size); }
+  CHIP_ERROR GetRotatingDeviceIdUniqueId(chip::MutableByteSpan &value) override { return original->GetRotatingDeviceIdUniqueId(value); }
+  CHIP_ERROR GetProductFinish(chip::app::Clusters::BasicInformation::ProductFinishEnum *value) override { return original->GetProductFinish(value); }
+  CHIP_ERROR GetProductPrimaryColor(chip::app::Clusters::BasicInformation::ColorEnum *value) override { return original->GetProductPrimaryColor(value); }
+} matterDeviceInfo;
+#endif
 static void cloudTask(void *) {
   uint32_t lastAnnouncement = 0;
+#if LUXIO_MATTER
+  bool matterStarted = false;
+#endif
   for (;;) {
-    if (WiFi.status() != WL_CONNECTED) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+    if (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+    // Start once, only after Wi-Fi has an address. Serializing with HTTPS avoids
+    // overlapping Matter startup and TLS handshakes on the cloud worker.
+#if LUXIO_MATTER
+    if (!matterStarted && !state.matter_disabled) {
+      xSemaphoreTake(stateMutex, portMAX_DELAY);
+      const bool on = state.on; const uint32_t brightness = state.brightness;
+      xSemaphoreGive(stateMutex);
+      if (!matterLight.begin(on, {0, 0, 254}, constrain((brightness * 254 + 128) / 256, 1, 254), 370)) abort();
+      matterLight.onIdentify([](bool enabled) {
+        xSemaphoreTake(stateMutex, portMAX_DELAY);
+        identifyActive = enabled;
+        xSemaphoreGive(stateMutex);
+        return true;
+      });
+      // Start before registering control callbacks: Matter normalizes its level
+      // attribute during startup, but that must not turn a saved "off" state on.
+      // This also installs the provider before we read commissioning data below.
+      Matter.begin();
+      chip::DeviceLayer::PlatformMgr().LockChipStack();
+      matterDeviceInfo.original = chip::DeviceLayer::GetDeviceInstanceInfoProvider();
+      chip::DeviceLayer::SetDeviceInstanceInfoProvider(&matterDeviceInfo);
+      chip::DeviceLayer::PlatformMgr().UnlockChipStack();
+      matterLight.onChangeBrightness([](uint8_t brightness) {
+        xSemaphoreTake(stateMutex, portMAX_DELAY);
+        uint32_t level = constrain((uint32_t(brightness) * 256 + 127) / 254, 1, 256);
+        if (state.brightness != level) transition->begin(millis());
+        state.brightness = level; dirty = true; xSemaphoreGive(stateMutex); return true;
+      });
+      matterLight.onChangeOnOff([](bool on) {
+        xSemaphoreTake(stateMutex, portMAX_DELAY); transition->begin(millis()); state.on = on; dirty = true; xSemaphoreGive(stateMutex); return true;
+      });
+      matterLight.onChangeColorHSV([](espHsvColor_t hsv) {
+        hsv.v = 255; auto rgb = espHsvColorToRgbColor(hsv);
+        xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true; state.color = {rgb.r, rgb.g, rgb.b, 0, 0, 0}; applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
+      });
+      matterLight.onChangeColorTemperature([](uint16_t mired) {
+        xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true;
+        uint32_t warm = constrain((int(mired) - 153) * 255 / (500 - 153), 0, 255);
+        if (!strcmp(state.config.strip_type, "WS2805")) state.color = {0, 0, 0, 0, warm, 255 - warm};
+        else if (!strcmp(state.config.strip_type, "WS2814")) state.color = {0, 0, 0, 255, 0, 0};
+        else state.color = {255, uint32_t(255 - warm * 90 / 255), uint32_t(255 - warm * 180 / 255), 0, 0, 0};
+        applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
+      });
+      // Read the actual provider payload; unsupported setters cannot personalize it.
+      chip::PayloadContents payload;
+      if (GetPayloadContents(payload, chip::RendezvousInformationFlag::kOnNetwork) == CHIP_NO_ERROR) {
+        char manual[32] = {}, qr[128] = {};
+        chip::MutableCharSpan manualSpan(manual), qrSpan(qr);
+        GetManualPairingCode(manualSpan, payload); GetQRCode(qrSpan, payload);
+        xSemaphoreTake(stateMutex, portMAX_DELAY);
+        pairingCode = manual; pairingQr = qr;
+        xSemaphoreGive(stateMutex);
+      }
+      matterStarted = true;
+    }
+#endif
+
     if (!lastAnnouncement || uint32_t(millis() - lastAnnouncement) >= 900000) {
       lastAnnouncement = millis();
       auto snapshot = std::make_unique<luxio_State>();
@@ -825,37 +934,6 @@ static void cloudTask(void *) {
   }
 }
 
-#if LUXIO_MATTER
-static MatterEnhancedColorLight matterLight;
-// Basic Information reads these strings from the provider, not writable
-// attributes. Delegate all other factory data to the SDK's active provider.
-static class LuxioDeviceInfo : public chip::DeviceLayer::DeviceInstanceInfoProvider {
-public:
-  chip::DeviceLayer::DeviceInstanceInfoProvider *original = nullptr;
-  CHIP_ERROR GetVendorName(char *buffer, size_t size) override {
-    if (size < sizeof("Luxio Lighting")) return CHIP_ERROR_BUFFER_TOO_SMALL;
-    memcpy(buffer, "Luxio Lighting", sizeof("Luxio Lighting"));
-    return CHIP_NO_ERROR;
-  }
-  CHIP_ERROR GetProductName(char *buffer, size_t size) override {
-    if (size < sizeof("DIY")) return CHIP_ERROR_BUFFER_TOO_SMALL;
-    memcpy(buffer, "DIY", sizeof("DIY"));
-    return CHIP_NO_ERROR;
-  }
-  CHIP_ERROR GetVendorId(uint16_t &value) override { return original->GetVendorId(value); }
-  CHIP_ERROR GetProductId(uint16_t &value) override { return original->GetProductId(value); }
-  CHIP_ERROR GetPartNumber(char *buffer, size_t size) override { return original->GetPartNumber(buffer, size); }
-  CHIP_ERROR GetProductURL(char *buffer, size_t size) override { return original->GetProductURL(buffer, size); }
-  CHIP_ERROR GetProductLabel(char *buffer, size_t size) override { return original->GetProductLabel(buffer, size); }
-  CHIP_ERROR GetSerialNumber(char *buffer, size_t size) override { return original->GetSerialNumber(buffer, size); }
-  CHIP_ERROR GetManufacturingDate(uint16_t &year, uint8_t &month, uint8_t &day) override { return original->GetManufacturingDate(year, month, day); }
-  CHIP_ERROR GetHardwareVersion(uint16_t &value) override { return original->GetHardwareVersion(value); }
-  CHIP_ERROR GetHardwareVersionString(char *buffer, size_t size) override { return original->GetHardwareVersionString(buffer, size); }
-  CHIP_ERROR GetRotatingDeviceIdUniqueId(chip::MutableByteSpan &value) override { return original->GetRotatingDeviceIdUniqueId(value); }
-  CHIP_ERROR GetProductFinish(chip::app::Clusters::BasicInformation::ProductFinishEnum *value) override { return original->GetProductFinish(value); }
-  CHIP_ERROR GetProductPrimaryColor(chip::app::Clusters::BasicInformation::ColorEnum *value) override { return original->GetProductPrimaryColor(value); }
-} matterDeviceInfo;
-#endif
 extern void startBluetooth();
 void setup() {
   Serial.begin(115200); // Binary protocol only; diagnostics must never be written here.
@@ -921,10 +999,22 @@ void setup() {
   LittleFS.mkdir("/scripts");
   LittleFS.mkdir("/gradients"); LittleFS.mkdir("/colors"); LittleFS.remove("/colors/pending"); LittleFS.remove("/gradients/pending");
   LittleFS.remove("/scripts/pending"); // Discard an interrupted save; the original remains intact.
-  // Allocate for the configured strip, not 1024 LEDs on every PSRAM-less board.
-  symbolCapacity = (state.config.led_count * 40 + 1) * sizeof(rmt_data_t);
-  symbols = static_cast<rmt_data_t *>(psramFound() ? ps_malloc(symbolCapacity) : malloc(symbolCapacity));
-  if (!symbols || !rmtInit(state.config.gpio, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000)) abort();
+  // The IDF encoder expands bits during transmission: 5 bytes per LED instead
+  // of a full 160-byte symbol frame. Keep this ISR-read payload in internal RAM.
+  ledByteCapacity = state.config.led_count * 5;
+  ledBytes = static_cast<uint8_t *>(heap_caps_malloc(ledByteCapacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!ledBytes) abort();
+  rmt_tx_channel_config_t channel = {};
+  channel.gpio_num = gpio_num_t(state.config.gpio); channel.clk_src = RMT_CLK_SRC_DEFAULT;
+  channel.resolution_hz = 10000000; channel.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
+  channel.trans_queue_depth = 1;
+  ESP_ERROR_CHECK(rmt_new_tx_channel(&channel, &ledChannel));
+  rmt_bytes_encoder_config_t encoding = {};
+  encoding.bit0 = {.duration0 = 3, .level0 = 1, .duration1 = 9, .level1 = 0};
+  encoding.bit1 = {.duration0 = 8, .level0 = 1, .duration1 = 4, .level1 = 0};
+  encoding.flags.msb_first = 1;
+  ESP_ERROR_CHECK(rmt_new_bytes_encoder(&encoding, &ledEncoder));
+  ESP_ERROR_CHECK(rmt_enable(ledChannel));
   if (state.mode == luxio_Mode_GRADIENT) renderGradient(state.gradient, pixels, state.config.led_count);
   else applyColor();
   render();
@@ -945,57 +1035,10 @@ void setup() {
   httpd_uri_t api = {}; api.uri = "/api"; api.method = HTTP_POST; api.handler = httpHandler; httpd_register_uri_handler(httpServer, &api);
   api.method = HTTP_OPTIONS; httpd_register_uri_handler(httpServer, &api);
   httpd_uri_t websocket = {}; websocket.uri = "/api/ws"; websocket.method = HTTP_GET; websocket.handler = websocketHandler; websocket.is_websocket = true; httpd_register_uri_handler(httpServer, &websocket);
-#if LUXIO_MATTER
-  if (!state.matter_disabled) {
-  if (!matterLight.begin(state.on, {0, 0, 254}, constrain((state.brightness * 254 + 128) / 256, 1, 254), 370)) abort();
-  matterLight.onIdentify([](bool enabled) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
-    identifyActive = enabled;
-    xSemaphoreGive(stateMutex);
-    return true;
-  });
-  // Start before registering control callbacks: Matter normalizes its level
-  // attribute during startup, but that must not turn a saved "off" state on.
-  // This also installs the provider before we read commissioning data below.
-  Matter.begin();
-  chip::DeviceLayer::PlatformMgr().LockChipStack();
-  matterDeviceInfo.original = chip::DeviceLayer::GetDeviceInstanceInfoProvider();
-  chip::DeviceLayer::SetDeviceInstanceInfoProvider(&matterDeviceInfo);
-  chip::DeviceLayer::PlatformMgr().UnlockChipStack();
-  matterLight.onChangeBrightness([](uint8_t brightness) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
-    uint32_t level = constrain((uint32_t(brightness) * 256 + 127) / 254, 1, 256);
-    if (state.brightness != level) transition->begin(millis());
-    state.brightness = level; dirty = true; xSemaphoreGive(stateMutex); return true;
-  });
-  matterLight.onChangeOnOff([](bool on) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY); transition->begin(millis()); state.on = on; dirty = true; xSemaphoreGive(stateMutex); return true;
-  });
-  matterLight.onChangeColorHSV([](espHsvColor_t hsv) {
-    hsv.v = 255; auto rgb = espHsvColorToRgbColor(hsv);
-    xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true; state.color = {rgb.r, rgb.g, rgb.b, 0, 0, 0}; applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
-  });
-  matterLight.onChangeColorTemperature([](uint16_t mired) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true;
-    uint32_t warm = constrain((int(mired) - 153) * 255 / (500 - 153), 0, 255);
-    if (!strcmp(state.config.strip_type, "WS2805")) state.color = {0, 0, 0, 0, warm, 255 - warm};
-    else if (!strcmp(state.config.strip_type, "WS2814")) state.color = {0, 0, 0, 255, 0, 0};
-    else state.color = {255, uint32_t(255 - warm * 90 / 255), uint32_t(255 - warm * 180 / 255), 0, 0, 0};
-    applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
-  });
-  // Read the actual provider payload; unsupported setters cannot personalize it.
-  chip::PayloadContents payload;
-  if (GetPayloadContents(payload, chip::RendezvousInformationFlag::kOnNetwork) == CHIP_NO_ERROR) {
-    char manual[32] = {}, qr[128] = {};
-    chip::MutableCharSpan manualSpan(manual), qrSpan(qr);
-    GetManualPairingCode(manualSpan, payload); GetQRCode(qrSpan, payload);
-    pairingCode = manual; pairingQr = qr;
-  }
-  }
-#endif
   startBluetooth();
   xTaskCreate(cloudTask, "luxio-cloud", 12288, nullptr, 1, nullptr);
-  // Reaching initialized controls/Matter acknowledges the completed request.
+  // Reaching initialized local controls acknowledges the completed request.
+  // An offline device must not roll back merely because Matter is waiting for Wi-Fi.
   // No timer, boot path or Matter callback checks for or starts a new update.
   esp_ota_mark_app_valid_cancel_rollback();
   prefs.remove("ota-job");
@@ -1055,7 +1098,10 @@ void loop() {
   if (millis() - lastFrame >= 33) {
     lastFrame = millis(); xSemaphoreTake(stateMutex, portMAX_DELAY);
     if (animation) {
-      luaInstructions = 100000; luaDeadline = millis() + 20; lua_getglobal(animation, "loop");
+      luaInstructions = 100000;
+      taskYIELD(); TaskStatus_t current;
+      vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
+      luaDeadline = uint32_t(current.ulRunTimeCounter) + 20000; lua_getglobal(animation, "loop");
       if (lua_pcall(animation, 0, 0, 0) != LUA_OK) {
         const char *error = lua_tostring(animation, -1);
         strlcpy(animationError, error ? error : "Animation failed without an error message", sizeof(animationError));
