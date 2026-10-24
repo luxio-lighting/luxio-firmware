@@ -154,3 +154,9 @@ checks, TypeScript checks and all host/native tests pass. iOS protocol tests and
 signed phone build pass; the app is installed and launched on the user's iPhone.
 Android unit tests and the debug APK build pass. Other boards, the positive Matter
 startup path and large-strip TLS headroom still require physical qualification.
+
+Build 28 was published on channel 0 by workflow run 40130627866 from commit
+2dad5bf46859c8531ed74eeafbff4e1a16c8af5d. All five chip builds and publication
+succeeded. Independent production API checks downloaded all 25 parts and verified
+build/channel/target, sizes, SHA-256 hashes, embedded chip IDs and flash offsets.
+Setup and API target snapshots were synchronized; partition layouts are unchanged.
