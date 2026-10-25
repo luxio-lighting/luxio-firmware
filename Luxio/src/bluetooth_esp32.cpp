@@ -2,7 +2,7 @@
 #ifndef LUXIO_MATTER
 #define LUXIO_MATTER 1
 #endif
-#if CONFIG_IDF_TARGET_ESP32 && !LUXIO_MATTER
+#if CONFIG_IDF_TARGET_ESP32 && !CONFIG_BT_NIMBLE_ENABLED && !LUXIO_MATTER
 // The original ESP32 SDK excludes CHIPoBLE and only bundles Bluedroid.
 // Keep this transport for diagnostic builds without linked Matter. Runtime
 // Matter gating in the public build does not enable this BLE transport.
@@ -106,7 +106,9 @@ void startBluetooth() {
       free(receiveBuffer); receiveBuffer = nullptr;
       memcpy(output, "LXP1", 4);
       output[4] = length >> 24; output[5] = length >> 16; output[6] = length >> 8; output[7] = length;
-      header = expected = received = 0;
+      // The reply owns its bytes now. Accept one pending request while sending
+      // it, so a client receiving the last notification cannot race our cleanup.
+      header = expected = received = 0; ready = false;
       xSemaphoreGive(bufferMutex);
       const size_t chunkSize = max(20, int(server->getPeerMTU(peer)) - 3);
       for (size_t offset = 0; offset < length + 8;) {
@@ -128,13 +130,10 @@ void startBluetooth() {
         offset += chunk; vTaskDelay(pdMS_TO_TICKS(15));
       }
       allocated.reset();
-      xSemaphoreTake(bufferMutex, portMAX_DELAY);
-      if (session == peerSession) ready = false;
-      xSemaphoreGive(bufferMutex);
     }
   }, "luxio-ble-api", 6144, nullptr, 1, nullptr);
 }
-#elif CONFIG_IDF_TARGET_ESP32
+#elif CONFIG_IDF_TARGET_ESP32 && !CONFIG_BT_NIMBLE_ENABLED
 // Retain the working USB/Wi-Fi/Matter stack until combined BLE fits in RAM.
 // Do not link the BLE controller: Arduino must release its reserved memory.
 void startBluetooth() {}

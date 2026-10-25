@@ -9,7 +9,8 @@
 #include <vector>
 
 int main(int argc, char **argv) {
-  luxio_Script script{}, decoded{};
+  char sourceBuffer[16385]{};
+  luxio_Script script{}, decoded{}; script.source = sourceBuffer;
   strcpy(script.id, "12345678-1234-4234-8234-123456789abc");
   strcpy(script.name, "Underwater 🌊");
   script.mode = luxio_Mode_GRADIENT;
@@ -24,6 +25,7 @@ int main(int argc, char **argv) {
     assert(!strcmp(script.source, decoded.source));
     std::ofstream out(argv[2], std::ios::binary); out.write(reinterpret_cast<char *>(bytes), size);
     printf("%zu -> %zu bytes (including name, UUID and header)\n", source.size(), size);
+    pb_release(luxio_Script_fields, &decoded);
     return 0;
   }
   const char *source = "function setup()\n local count = luxio_get_pixel_count()\n for i = 0, count - 1 do\n  luxio_set_pixel_color(i, 0, 120, 255)\n end\nend\nfunction loop() end\n";
@@ -31,7 +33,7 @@ int main(int argc, char **argv) {
   auto size = encodeStoredScript(script, bytes, sizeof(bytes));
   assert(size && decodeStoredScript(bytes, size, decoded));
   assert(!strcmp(decoded.source, source) && !strcmp(decoded.id, script.id) && !strcmp(decoded.name, script.name) && decoded.mode == script.mode);
-  assert(decodeStoredScript(bytes, size, decoded, true) && !decoded.source[0] && decoded.mode == script.mode);
+  assert(decodeStoredScript(bytes, size, decoded, true) && !decoded.source && decoded.mode == script.mode);
   for (size_t i = 0; i < size; ++i) {
     bytes[i] ^= 0x80;
     assert(!decodeStoredScript(bytes, size, decoded));
@@ -42,7 +44,7 @@ int main(int argc, char **argv) {
   auto encoder = pb_ostream_from_buffer(bytes, sizeof(bytes));
   assert(pb_encode(&encoder, luxio_Script_fields, &script));
   assert(decodeStoredScript(bytes, encoder.bytes_written, decoded) && !strcmp(decoded.source, source));
-  assert(decodeStoredScript(bytes, encoder.bytes_written, decoded, true) && !decoded.source[0]);
+  assert(decodeStoredScript(bytes, encoder.bytes_written, decoded, true) && !decoded.source);
   // Maximum-size repetitive and incompressible source, plus tiny fallback.
   std::mt19937 random(12345);
   for (size_t length : {size_t(1), size_t(31), size_t(1024), size_t(16384)}) {
@@ -69,8 +71,9 @@ int main(int argc, char **argv) {
   }
   script.source[0] = 0;
   assert(!encodeStoredScript(script, bytes, sizeof(bytes)));
-  memset(script.source, 'x', sizeof(script.source));
+  memset(script.source, 'x', sizeof(sourceBuffer));
   assert(!encodeStoredScript(script, bytes, sizeof(bytes)));
   assert(!decodeStoredScript(bytes, SCRIPT_RECORD_MAX + 1, decoded));
   puts("PASS: compressed/plain/legacy records, exact text and mode, metadata listing, 16 KiB limit, corruption, truncation and malformed input");
+  pb_release(luxio_Script_fields, &decoded);
 }

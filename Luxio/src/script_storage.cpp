@@ -20,9 +20,9 @@ static uint32_t recordChecksum(const uint8_t *bytes, size_t size) {
 }
 
 size_t encodeStoredScript(const luxio_Script &script, uint8_t *output, size_t capacity) {
-  const size_t sourceSize = strnlen(script.source, sizeof(script.source));
+  const size_t sourceSize = script.source ? strnlen(script.source, SCRIPT_SOURCE_MAX + 1) : 0;
   const size_t nameSize = strnlen(script.name, sizeof(script.name));
-  if (capacity < 24 || !sourceSize || sourceSize >= sizeof(script.source) ||
+  if (capacity < 24 || !sourceSize || sourceSize > SCRIPT_SOURCE_MAX ||
       !nameSize || nameSize >= sizeof(script.name) || strnlen(script.id, sizeof(script.id)) != 36) return 0;
   auto metadata = pb_ostream_from_buffer(output + 24, capacity - 24);
   if (!pb_encode_tag(&metadata, PB_WT_STRING, 1) || !pb_encode_string(&metadata, reinterpret_cast<const uint8_t *>(script.id), 36) ||
@@ -65,23 +65,26 @@ size_t encodeStoredScript(const luxio_Script &script, uint8_t *output, size_t ca
 }
 
 bool decodeStoredScript(const uint8_t *bytes, size_t size, luxio_Script &script, bool metadataOnly) {
+  pb_release(luxio_Script_fields, &script);
   memset(&script, 0, sizeof(script));
   if (!size || size > SCRIPT_RECORD_MAX) return false;
   if (size < 4 || memcmp(bytes, "LXS1", 4)) {
     auto legacy = pb_istream_from_buffer(bytes, size);
-    if (!pb_decode(&legacy, luxio_Script_fields, &script) || strlen(script.id) != 36 || !script.name[0] || !script.source[0]) return false;
-    if (metadataOnly) script.source[0] = 0;
+    if (!pb_decode(&legacy, luxio_Script_fields, &script) || strlen(script.id) != 36 || !script.name[0] || !script.source || !script.source[0] || strnlen(script.source, SCRIPT_SOURCE_MAX + 1) > SCRIPT_SOURCE_MAX) return false;
+    if (metadataOnly) { free(script.source); script.source = nullptr; }
     return true;
   }
   if (size < 24) return false;
   uint32_t fields[5] = {};
   for (size_t i = 0; i < 5; ++i) for (int byte = 0; byte < 4; ++byte) fields[i] |= uint32_t(bytes[4 + i * 4 + byte]) << (byte * 8);
   const auto codec = fields[0], metaSize = fields[1], sourceSize = fields[2], payloadSize = fields[3];
-  if (codec > 1 || !metaSize || metaSize > 2048 || !sourceSize || sourceSize >= sizeof(script.source) ||
-      !payloadSize || payloadSize > sizeof(script.source) || size != 24 + metaSize + payloadSize || fields[4] != recordChecksum(bytes, size)) return false;
+  if (codec > 1 || !metaSize || metaSize > 2048 || !sourceSize || sourceSize > SCRIPT_SOURCE_MAX ||
+      !payloadSize || payloadSize > SCRIPT_SOURCE_MAX || size != 24 + metaSize + payloadSize || fields[4] != recordChecksum(bytes, size)) return false;
   auto metadata = pb_istream_from_buffer(bytes + 24, metaSize);
-  if (!pb_decode(&metadata, luxio_Script_fields, &script) || strlen(script.id) != 36 || !script.name[0] || script.source[0] || script.mode > luxio_Mode_ANIMATION) return false;
+  if (!pb_decode(&metadata, luxio_Script_fields, &script) || strlen(script.id) != 36 || !script.name[0] || script.source || script.mode > luxio_Mode_ANIMATION) return false;
   if (metadataOnly) return true;
+  script.source = static_cast<char *>(malloc(sourceSize + 1));
+  if (!script.source) return false;
   const auto *payload = bytes + 24 + metaSize;
   if (codec == 0) {
     if (sourceSize != payloadSize) return false;

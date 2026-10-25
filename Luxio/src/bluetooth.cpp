@@ -83,6 +83,9 @@ static int writeRequest(uint16_t conn, uint16_t, ble_gatt_access_ctxt *context, 
 static ble_gatt_chr_def characteristics[3];
 static ble_gatt_svc_def services[2];
 void startBluetooth() {
+#if CONFIG_IDF_TARGET_ESP32
+  btStarted(); // Retain controller RAM during Arduino startup. NimBLE initializes it below.
+#endif
   bufferMutex = xSemaphoreCreateMutex();
   if (!bufferMutex) abort();
   if (nimble_port_init() != ESP_OK) abort();
@@ -118,7 +121,9 @@ void startBluetooth() {
       free(receiveBuffer); receiveBuffer = nullptr;
       output[0]=0x4c; output[1]=0x58; output[2]=0x50; output[3]=0x31;
       output[4]=length>>24; output[5]=length>>16; output[6]=length>>8; output[7]=length;
-      header = expected = received = 0;
+      // The reply owns its bytes now. Accept one pending request while sending
+      // it, so a client receiving the last notification cannot race our cleanup.
+      header = expected = received = 0; ready = false;
       xSemaphoreGive(bufferMutex);
       const size_t chunkSize = max(20, int(ble_att_mtu(peer)) - 3);
       for (size_t offset = 0; offset < length + 8;) {
@@ -137,7 +142,6 @@ void startBluetooth() {
         offset += chunk; vTaskDelay(pdMS_TO_TICKS(8));
       }
       allocated.reset();
-      xSemaphoreTake(bufferMutex, portMAX_DELAY); if (session == peerSession) ready = false; xSemaphoreGive(bufferMutex);
     }
   }, "luxio-ble-api", 6144, nullptr, 1, nullptr);
 }

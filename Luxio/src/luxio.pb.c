@@ -24,7 +24,7 @@ PB_BIND(luxio_WifiNetwork, luxio_WifiNetwork, AUTO)
 PB_BIND(luxio_AnimationParameter, luxio_AnimationParameter, AUTO)
 
 
-PB_BIND(luxio_Script, luxio_Script, 4)
+PB_BIND(luxio_Script, luxio_Script, 2)
 
 
 PB_BIND(luxio_Gradient, luxio_Gradient, 2)

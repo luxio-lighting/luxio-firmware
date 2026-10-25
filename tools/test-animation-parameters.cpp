@@ -20,11 +20,12 @@ int main() {
   patch[1].value = 99; assert(!updateAnimationParameters(parameters, count, patch, 2)); assert(parameters[0].value == 0); assert(parameters[1].value == 99);
   patch[1].value = NAN; assert(updateAnimationParameters(parameters, count, patch, 2));
   patch[1] = patch[0]; assert(updateAnimationParameters(parameters, count, patch, 2));
-  luxio_Script saved{}; strcpy(saved.id, "11111111-1111-4111-8111-111111111111"); strcpy(saved.name, "Parameterized"); strcpy(saved.source, source); saved.mode = luxio_Mode_ANIMATION;
+  char sourceBuffer[16385]{};
+  luxio_Script saved{}; saved.source = sourceBuffer; strcpy(saved.id, "11111111-1111-4111-8111-111111111111"); strcpy(saved.name, "Parameterized"); strcpy(saved.source, source); saved.mode = luxio_Mode_ANIMATION;
   saved.parameters_count = count; memcpy(saved.parameters, parameters, sizeof(parameters));
   std::vector<uint8_t> bytes(SCRIPT_RECORD_MAX); auto size = encodeStoredScript(saved, bytes.data(), bytes.size()); assert(size);
   luxio_Script decoded{}; assert(decodeStoredScript(bytes.data(), size, decoded)); assert(decoded.parameters_count == 2); assert(decoded.parameters[0].value == 0); assert(decoded.parameters[1].value == 99); assert(!strcmp(decoded.source, source));
-  assert(decodeStoredScript(bytes.data(), size, decoded, true)); assert(decoded.source[0] == 0); assert(decoded.parameters[1].value == 99);
+  assert(decodeStoredScript(bytes.data(), size, decoded, true)); assert(decoded.source == nullptr); assert(decoded.parameters[1].value == 99);
   const char *controls = "-- @parameter Speed,Slider,50,0,100\n-- @parameter Spacing,Number,8,1,64\n-- @parameter Pulse,Checkbox,true\n-- @parameter Legacy,Boolean,false\nfunction loop() end";
   assert(!parseAnimationParameters(controls, saved.parameters, saved.parameters_count));
   assert(saved.parameters_count == 4);
@@ -45,9 +46,10 @@ int main() {
   assert(!parseAnimationPreview("-- @preview ff0000,00ff00,0000ff", saved.preview, saved.preview_count));
   size = encodeStoredScript(saved, bytes.data(), bytes.size()); assert(size);
   assert(decodeStoredScript(bytes.data(), size, decoded, true));
-  assert(decoded.preview_count == 3 && decoded.preview[1].green == 255 && decoded.source[0] == 0);
+  assert(decoded.preview_count == 3 && decoded.preview[1].green == 255 && decoded.source == nullptr);
   assert(decodeStoredScript(bytes.data(), size, decoded));
   assert(decoded.preview_count == 3 && decoded.preview[2].blue == 255 && !strcmp(decoded.source, source));
   puts("PASS: preview parsing and compressed metadata roundtrip");
   puts("PASS: C++ parameter validation, atomic updates, compressed persistence and metadata readback");
+  pb_release(luxio_Script_fields, &decoded);
 }

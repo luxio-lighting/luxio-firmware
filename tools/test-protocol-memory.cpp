@@ -15,10 +15,12 @@ void *operator new[](size_t size, const std::nothrow_t &) noexcept {
   try { return ::operator new[](size); } catch (...) { return nullptr; }
 }
 int main() {
+  static_assert(sizeof(luxio_Script) < 2000);
   static_assert(sizeof(luxio_Request) < 2000);
-  static_assert(sizeof(luxio_Response) < 3000);
+  static_assert(sizeof(luxio_Response) < 1500);
   uint8_t bytes[32768];
-  luxio_Script script = luxio_Script_init_zero;
+  char sourceBuffer[16385]{};
+  luxio_Script script = luxio_Script_init_zero; script.source = sourceBuffer;
   memset(script.source, 'x', 16384); script.source[16384] = 0;
   strcpy(script.name, "large script");
   luxio_Request request = luxio_Request_init_zero;
@@ -71,6 +73,30 @@ int main() {
   assert(!strcmp(decoded.network_status.gateway, "192.0.2.1"));
   assert(decoded.network_status.dns_count == 2 && !strcmp(decoded.network_status.dns[1], "1.1.1.1"));
   pb_release(luxio_Response_fields, &decoded);
+  // Responses borrow the scan cache instead of embedding 32 entries in every
+  // reply/event; verify the full cache still roundtrips over the same wire format.
+  luxio_WifiNetwork networks[32]{};
+  for (size_t i = 0; i < 32; i++) {
+    snprintf(networks[i].ssid, sizeof(networks[i].ssid), "network-%zu", i);
+    networks[i].rssi = -30 - int(i);
+    networks[i].password_required = i % 2;
+  }
+  response = luxio_Response_init_zero;
+  response.wifi_networks = networks; response.wifi_networks_count = 32;
+  encoder = pb_ostream_from_buffer(bytes, sizeof(bytes));
+  assert(pb_encode(&encoder, luxio_Response_fields, &response));
+  decoded = luxio_Response_init_zero;
+  decoder = pb_istream_from_buffer(bytes, encoder.bytes_written);
+  assert(pb_decode(&decoder, luxio_Response_fields, &decoded));
+  assert(decoded.wifi_networks_count == 32);
+  for (size_t i = 0; i < 32; i++) {
+    assert(!strcmp(decoded.wifi_networks[i].ssid, networks[i].ssid));
+    assert(decoded.wifi_networks[i].rssi == networks[i].rssi);
+    assert(decoded.wifi_networks[i].password_required == networks[i].password_required);
+  }
+  pb_release(luxio_Response_fields, &decoded);
+  assert(!decoded.wifi_networks);
+  response = luxio_Response_init_zero;
   luxio_Config relayConfig = luxio_Config_init_zero;
   assert(!relayConfig.has_relay && !relayConfig.relay.enabled);
   relayConfig.has_relay = true; relayConfig.relay.enabled = true;

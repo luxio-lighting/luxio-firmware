@@ -1,5 +1,6 @@
 #include "luxio.pb.h"
 #include "transition.h"
+#include "led_encoder.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -38,7 +39,8 @@ static int ledChannel, ledEncoder;
 static std::vector<uint8_t> transmitted;
 static bool txFinished;
 static int rmt_transmit(int, int, const void *data, size_t length, const rmt_transmit_config_t *) {
-  transmitted.assign(static_cast<const uint8_t *>(data), static_cast<const uint8_t *>(data) + length); txFinished = false; return 0;
+  transmitted.assign(static_cast<const uint8_t *>(data), static_cast<const uint8_t *>(data) + length);
+  txFinished = false; return 0;
 }
 static int rmt_tx_wait_all_done(int, int timeout) { assert(timeout >= 50); txFinished = true; return 0; }
 static void delayMicroseconds(int us) { assert(txFinished && us >= 600); }
@@ -46,6 +48,27 @@ static int rmt_new_bytes_encoder(const rmt_bytes_encoder_config_t *c, int *) {
   assert(c->flags.msb_first);
   assert(c->bit0.duration0 == 3 && c->bit0.duration1 == 9 && c->bit0.level0 == 1 && c->bit0.level1 == 0);
   assert(c->bit1.duration0 == 8 && c->bit1.duration1 == 4 && c->bit1.level0 == 1 && c->bit1.level1 == 0); return 0;
+}
+static int ledSpi;
+struct spi_transaction_t { size_t length; const void *tx_buffer; };
+static int spi_device_transmit(int, const spi_transaction_t *transaction) {
+  const auto *bytes = static_cast<const uint8_t *>(transaction->tx_buffer);
+  const size_t channels = !strcmp(state.config.strip_type, "WS2805") ? 5 : !strcmp(state.config.strip_type, "WS2814") ? 4 : 3;
+  const size_t count = state.config.led_count * channels;
+  assert(transaction->length % 32 == 0 && transaction->length / 8 == count * 4 + 240);
+  transmitted.clear();
+  for (size_t i = 0; i < count; i++) {
+    uint8_t value = 0;
+    for (int bit = 0; bit < 8; bit++) {
+      const unsigned symbol = (bytes[i * 4 + bit / 2] >> (bit % 2 == 0 ? 4 : 0)) & 15;
+      assert(symbol == 8 || symbol == 12);
+      value = uint8_t((value << 1) | (symbol == 12));
+    }
+    transmitted.push_back(value);
+  }
+  for (size_t i = count * 4; i < transaction->length / 8; i++) assert(bytes[i] == 0);
+  txFinished = true;
+  return 0;
 }
 // PRODUCTION_RENDER
 
@@ -122,9 +145,11 @@ int main() {
   try { luaHook(nullptr, nullptr); assert(false); } catch (const std::string &e) { assert(e.find("CPU time budget") != std::string::npos); }
   luaInstructions = 1000; cpuTime = 0; luaDeadline = 20000;
   try { luaHook(nullptr, nullptr); assert(false); } catch (const std::string &e) { assert(e.find("instruction budget") != std::string::npos); }
+  for (int driver : {LUXIO_INTERNAL_RAM_RADIOS}) {
+  ledSpi = driver;
   // PRODUCTION_ENCODING
   for (uint32_t count : {1, 60, 100, 1024}) {
-    std::vector<uint8_t> frames(count * 18), packed(count * 5);
+    std::vector<uint8_t> frames(count * 18), packed(count * 20 + 240);
     pixels = reinterpret_cast<uint8_t (*)[6]>(frames.data()); ledBytes = packed.data();
     OutputTransition fade(pixels + count, pixels + count * 2, count); transition = &fade;
     for (uint32_t i = 0; i < count; i++) for (int c = 0; c < 6; c++) pixels[i][c] = (i + c + 1) % 256;
@@ -144,6 +169,7 @@ int main() {
     }
     state.on = false; render(); assert(pinLevel == LOW);
     for (uint8_t value : transmitted) assert(value == 0);
+  }
   }
   for (bool disabled : {false, true}) {
     disabledScenario = state.matter_disabled = disabled;

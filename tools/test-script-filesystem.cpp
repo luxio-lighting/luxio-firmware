@@ -42,7 +42,8 @@ int main(int argc, char **argv) {
   config.read_size = 128; config.prog_size = 128; config.block_size = 4096; config.block_count = 64;
   config.cache_size = 512; config.lookahead_size = 128; config.block_cycles = 512;
   lfs_t fs{};
-  luxio_Script script{}, decoded{};
+  char sourceBuffer[16385]{};
+  luxio_Script script{}, decoded{}; script.source = sourceBuffer;
   strcpy(script.name, "Saved animation or gradient");
   uint8_t bytes[SCRIPT_RECORD_MAX];
   size_t rawTotal = 0, compressedTotal = 0;
@@ -115,4 +116,5 @@ int main(int argc, char **argv) {
     assert(!lfs_unmount(&fs));
   }
   puts("PASS: full filesystem readback and atomic replacement across 40 interrupted-write points");
+  pb_release(luxio_Script_fields, &decoded);
 }

@@ -336,3 +336,103 @@ previously sampled 6,876 bytes free and a 4,340-byte largest block under the sam
 100-LED animation/polling workload. These are sampled observations, not a
 continuous minimum-heap guarantee. The test restored the original 60 LEDs and
 verified that Knight Rider remains active without update/animation errors.
+
+## Original ESP32 radio budget after signed HTTP (2026-10-25)
+
+Isolated diagnostic copies of build 32 (`ef214d7`) were tested on the same
+GL-C-016WL-D, ESP32-D0WD-V3, 4 MB flash, no PSRAM. No production feature gates
+were changed and no diagnostic was published. Only the application partition
+was flashed; recovery, device identity, Wi-Fi and strip/relay configuration
+were retained. Logs, diagnostic build script and measurement JSON are locally
+under `.sdk/radio32/`.
+
+| Diagnostic | Result | Lowest sampled free internal RAM | Smallest sampled largest block |
+| --- | --- | ---: | ---: |
+| Published configuration: Matter inactive, BLE excluded | Previous 100-LED workload passed | 49,708 B | 32,756 B |
+| Matter active, BLE excluded | 30 update checks with Knight Rider at 100 LEDs, HTTP/WebSocket polling passed; pairing payload available; two additional restarts passed | 21,528 B | 11,252 B |
+| BLE active, Matter linked but inactive | Booted, but loading Knight Rider failed with `Not enough memory for this request`; later GET_STATE in color mode reported the values at right | 1,364 B | 276 B |
+| BLE and Matter both active | Rebooted during Matter startup; endpoint initialization exhausted the heap, followed by a semaphore assertion | 88–104 B boot-log low-water marks | No useful block remained |
+| BLE active, Matter compiled out | 30 update checks with Knight Rider at 100 LEDs and HTTP/WebSocket polling passed; encrypted BLE control remains unqualified | 34,720 B | 18,420 B |
+| BLE first, fully stopped/released before Wi-Fi and Matter | Matter initialized, but loading Knight Rider failed with `not enough memory` | Not qualified under the animation workload | Not qualified |
+
+Successful stress runs used `tools/test-memory-device.ts`: 226 HTTP polls and
+226 WebSocket replies with Matter; 195 of each with Matter compiled out and
+BLE enabled. The latter does not establish successful BLE application traffic.
+The stress harness restored 60 LEDs after each successful run. Sampled heap
+figures are not continuous minimum-heap guarantees; the combined failure row
+instead explicitly reports the allocator low-water marks logged during startup.
+
+The normal PSRAM-probing profile could not link the BLE diagnostics: instruction
+RAM overflowed by 1,728 bytes with Matter linked, or 684 bytes with Matter
+removed. Setting the diagnostic board option to `PSRAM=disabled` allowed the BLE
+variants to link and run on this known no-PSRAM controller. This is not a solution
+for a universal PSRAM-detecting release. No SDK archives or linker regions were
+modified. Matter-only retained the production PSRAM-probing profile.
+
+With BLE included, removing Matter reduced linked `.data` + `.bss` from 121,376
+to 61,116 bytes: a 60,260-byte (58.8 KiB) static saving. A runtime Matter switch
+does not recover that memory. The staged diagnostic used a 60-second BLE-only
+window, then deleted its API task, deinitialized NimBLE/controller resources,
+released controller RAM, and started Wi-Fi followed by Matter. It recovered
+enough RAM to start Matter, but retained about 8–9 KiB less than Matter-only.
+After the failed animation load it had 39,316 bytes free and a 36,852-byte largest
+block; the transient Lua/command allocation peak still did not fit.
+
+Two nearby controllers advertised the same Luxio service. A nonmatching device
+was rejected after a read-only fingerprint check; no controls were changed on
+it. Subsequent targeted BLE writes failed with ATT `Insufficient Encryption`.
+The Mac was locked and could not display an actionable pairing prompt. Unlocking
+and successful encrypted BLE requests/reconnection remain required; a memory
+stress pass with BLE enabled must not be described as a BLE functional pass.
+Matter commissioning, secure sessions and controller interoperability were not
+tested. These results support further Matter-only qualification, not enabling
+both stacks in the public no-PSRAM build.
+
+After testing, the production build-32 application was restored and its flash
+hash verified. HTTP checks confirmed the original identity, 60-LED/GPIO16/GPIO18
+configuration, power, brightness and exact Knight Rider source. A production
+update check completed without update or animation errors. The public Matter
+and BLE gates remain unchanged.
+
+### BLE encryption size comparison (2026-10-25)
+
+Four isolated build-32 variants were compiled with the current Arduino 3.3.3 /
+ESP-IDF 5.5.1 SDK and installed NimBLE-Arduino 2.5.1. Every variant includes
+Matter, Wi-Fi, the LED driver and one BLE connection, using `PSRAM=disabled` to
+fit the diagnostic into instruction RAM. Each used its own copy of NimBLE;
+the shared installed library and production sources were not modified. These
+images were not flashed or published.
+
+| Change versus encrypted BLE baseline | Linked static DRAM | DRAM saved | Application image bytes saved | IRAM saved |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline, encrypted writes and bonding | 121,376 B | — | — | — |
+| Allow unencrypted writes and disable runtime security/bonding requests | 121,376 B | 0 B | 16 B | 0 B |
+| Above, plus compile out legacy and secure-connections pairing | 120,832 B | 544 B | 22,448 B | 0 B |
+| Above, plus disable persistent bond storage and set maximum bonds to zero | 119,880 B | 1,496 B | 29,296 B | 0 B |
+
+DRAM is measured from ELF `.dram0.data` + `.dram0.bss`, not the Arduino banner's
+nominal remaining-RAM figure. `.iram0.text` remained 127,223 bytes in all four
+builds. Image deltas include section alignment and per-build path strings, so
+flash savings are approximately 21.9 / 28.6 KiB. Commands, library copies, ELF
+files, symbol differences and `sizes.json` are in `.sdk/ble-security32/`.
+
+The compile-out variants set `MYNEWT_VAL_BLE_SM_SC=0` and
+`MYNEWT_VAL_BLE_SM_LEGACY=0` and removed the corresponding unconditional
+`CONFIG_BT_NIMBLE_SM_*` definitions from their private `nimconfig.h`. Some
+configuration mappings test macro presence, so defining a `CONFIG_*` symbol
+as zero alone would not disable it. The final variant also removed
+`CONFIG_BT_NIMBLE_NVS_PERSIST` and set `CONFIG_BT_NIMBLE_MAX_BONDS=0`.
+ELF inspection confirmed removal of the pairing procedure pool, secure pairing
+keys and peer/local bond arrays, rather than merely changing GATT permissions.
+
+The measured pairing pool is 400 bytes, its public/private keys total 96 bytes,
+and local/peer bond arrays use 264 bytes each. This configuration uses TinyCrypt,
+not a TLS session, for pairing. The 4,096-byte NimBLE task stack, 6,144-byte Luxio
+BLE API task, radio controller and ordinary packet buffers remain. Static
+savings do not measure transient pairing/connection peaks or prove that an
+unencrypted diagnostic works at runtime. Removing about 1.5 KiB does not resolve
+the earlier combined-stack exhaustion or the staged animation-allocation gap.
+
+Source references: [NimBLE 2.5.1 configuration](https://github.com/h2zero/NimBLE-Arduino/blob/2.5.1/src/nimconfig.h),
+[security-manager source](https://raw.githubusercontent.com/h2zero/NimBLE-Arduino/2.5.1/src/nimble/nimble/host/src/ble_sm.c),
+and [Espressif security configuration](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/kconfig-reference.html#config-bt-nimble-security-enable).

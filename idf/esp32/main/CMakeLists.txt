@@ -1,0 +1,5 @@
+file(GLOB_RECURSE LUXIO_SOURCES "luxio/*.cpp" "luxio/*.c")
+list(FILTER LUXIO_SOURCES EXCLUDE REGEX "app_description\\.cpp$")
+idf_component_register(SRCS ${LUXIO_SOURCES} INCLUDE_DIRS "luxio" "luxio/vendor/nanopb" REQUIRES arduino espressif__esp_matter esp_http_server esp_driver_rmt esp_driver_spi app_update espressif__network_provisioning)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE LUA_USE_C89 PB_ENABLE_MALLOC LUXIO_BUILD=${LUXIO_BUILD} LUXIO_MATTER=1 LUXIO_NETWORK_ONLY_MATTER=1 LUXIO_INTERNAL_RAM_RADIOS=1 LUXIO_APP_CAPACITY=2621440 LUXIO_APP_OFFSET=1245184 LUXIO_LOADER_CAPACITY=1179648 LUXIO_DEFAULT_GPIO=16)
+target_compile_options(${COMPONENT_LIB} PRIVATE -fstack-usage)

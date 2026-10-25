@@ -5,8 +5,12 @@ import { requestHttp, encodeRequest, decodeResponse, operations as op } from '..
 let id = 30000;
 const address = process.env.DEVICE_ADDRESS;
 if (!address) throw new Error('Set DEVICE_ADDRESS for this opt-in physical-device test');
+const ledCount = Number(process.env.LED_COUNT ?? 1024);
+assert.ok(Number.isInteger(ledCount) && ledCount >= 1 && ledCount <= 1024);
 const initial = await requestHttp(address, {id: id++, operation: op.GET_STATE});
 if (process.env.EXPECTED_BUILD) assert.equal(initial.state?.build, Number(process.env.EXPECTED_BUILD));
+if (process.env.EXPECT_MATTER === '1') assert.equal(initial.state?.matterDisabled, false);
+let lastUptime = initial.networkStatus?.uptimeMs ?? 0;
 assert.equal(initial.state?.mode, 2);
 assert.ok(initial.state, 'Device state required');
 await mkdir('.sdk', {recursive: true});
@@ -21,7 +25,7 @@ await new Promise<void>((resolve, reject) => {ws.once('open', resolve); ws.once(
 const active = (await requestHttp(address, {id: id++, operation: op.GET_SCRIPT})).script!;
 const results: unknown[] = [];
 try {
-  await requestHttp(address, {id: id++, operation: op.SET_CONFIG, config: {...initial.state!.config, ledCount: 100}});
+  await requestHttp(address, {id: id++, operation: op.SET_CONFIG, config: {...initial.state!.config, ledCount}});
   await requestHttp(address, {id: id++, operation: op.SET_SCRIPT, script: active});
   let minFree = Infinity, minBlock = Infinity, polls = 0;
   for (let round = 0; round < 30; round++) {
@@ -34,10 +38,12 @@ try {
       assert.equal(response.state?.mode, 2, response.animationError);
       assert.equal(response.animationError, '');
       assert.equal(response.state?.scriptName, initial.state?.scriptName, 'Lighting selection changed; stopping test');
-      assert.equal(response.state?.config.ledCount, 100);
+      assert.equal(response.state?.config.ledCount, ledCount);
       assert.equal(response.updateError, '');
       assert.equal(websocketError, '');
       assert.ok(response.networkStatus);
+      assert.ok(response.networkStatus.uptimeMs >= lastUptime, 'Device restarted during test');
+      lastUptime = response.networkStatus.uptimeMs;
       minFree = Math.min(minFree, response.networkStatus!.internalFree);
       minBlock = Math.min(minBlock, response.networkStatus!.internalLargestBlock);
       polls++;
@@ -54,8 +60,8 @@ try {
   ws.close();
   const current = await requestHttp(address, {id: id++, operation: op.GET_STATE});
   // Restore only the LED count changed by this test; preserve newer app controls.
-  if (current.state?.config.ledCount === 100) {
-    const currentScript = current.state.mode === 2 ? (await requestHttp(address, {id: id++, operation: op.GET_SCRIPT})).script : undefined;
+  if (current.state?.config.ledCount === ledCount) {
+    const currentScript = current.state.mode === 2 ? (await requestHttp(address, {id: id++, operation: op.GET_SCRIPT})).script : current.animationError ? active : undefined;
     await requestHttp(address, {id: id++, operation: op.SET_CONFIG, config: {...current.state.config, ledCount: initial.state!.config.ledCount}});
     if (currentScript) await requestHttp(address, {id: id++, operation: op.SET_SCRIPT, script: currentScript});
     else if (current.state.mode === 1 && current.state.gradient) await requestHttp(address, {id: id++, operation: op.SET_GRADIENT, gradient: current.state.gradient});
@@ -64,4 +70,4 @@ try {
   }
   await writeFile('.sdk/memory-device-results.json', JSON.stringify(results, null, 2));
 }
-console.log('PASS: 30 signed-HTTP update checks, 100 LEDs, active animation, concurrent HTTP and WebSocket polling/broadcasts');
+console.log(`PASS: 30 signed-HTTP update checks, ${ledCount} LEDs, active animation, concurrent HTTP and WebSocket polling/broadcasts`);

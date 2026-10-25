@@ -14,10 +14,11 @@ RX = 'e97b1001-3c27-4a20-9df4-7d025bc7e451'
 TX = 'e97b1002-3c27-4a20-9df4-7d025bc7e451'
 parser = argparse.ArgumentParser()
 parser.add_argument('--device-id', required=True, help='Expected fingerprint; abort before mutations if it differs')
+parser.add_argument('--address', help='Optional platform BLE address/UUID to select one of multiple Luxio devices')
 args = parser.parse_args()
 
 async def main():
-    device = await BleakScanner.find_device_by_filter(lambda d, a: SERVICE in a.service_uuids, timeout=15)
+    device = await BleakScanner.find_device_by_filter(lambda d, a: SERVICE in a.service_uuids and (not args.address or d.address == args.address), timeout=15)
     if device is None:
         raise RuntimeError('Luxio Bluetooth service not found')
     buffer = bytearray()
@@ -81,7 +82,7 @@ async def main():
             assert not stopped.state.active_script_id
             await send(pb.DELETE_SCRIPT, script_id=script_id)
             script_id = None
-            print('PASS: BLE color, large script upload/download, Lua run, brightness arbitration and delete', flush=True)
+            print('PASS: BLE color, fragmented script upload/download, Lua run, brightness arbitration and delete', flush=True)
         finally:
             if script_id:
                 await send(pb.DELETE_SCRIPT, script_id=script_id)
