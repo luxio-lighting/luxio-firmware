@@ -50,6 +50,12 @@ jobs:
         chip: ${{ fromJSON(needs.matrix.outputs.chips) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Make room for source SDK container and build
+        if: matrix.chip == 'esp32c5' || matrix.chip == 'esp32c6'
+        run: |
+          # These preinstalled toolchains are unused on this disposable runner.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
+          df -h /
       - uses: arduino/setup-arduino-cli@v2
       - run: tools/bootstrap-firmware.sh
       - uses: actions/setup-node@v4
