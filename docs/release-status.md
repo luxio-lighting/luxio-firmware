@@ -498,7 +498,7 @@ left on the published build, with its original settings. This qualifies the
 C6 update path, not C5 hardware or physical 1,024-LED signal quality.
 
 
-## Unreleased build 34 — radio settings, SK6812 and update-only state
+## Build 34 development — included in public build 35
 
 All five targets compile and package inside their existing 4 MB layouts. The C6 was tested with 1024 SK6812 pixels configured, USB control, Wi-Fi/Matter off/on, and cold-boot output. With Matter fully initialized, free internal RAM was 143,752 bytes; Wi-Fi alone 177,668; Wi-Fi off (Matter waiting) 257,288. The user confirmed on 2026-10-25 that their physical SK6812 strip works.
 
@@ -507,7 +507,7 @@ Normal boots show the Luxio gradient and retain hardware/radio settings. Only an
 iOS radio-confirmation and SK6812 simulator UI tests pass; the signed app is installed on the paired iPhone (launch blocked while locked). Android builds and unit tests pass. Setup passes its existing 73 browser tests and an additional SK6812 selection/protocol test. Existing uncommitted mobile work was preserved.
 
 
-## Unreleased build 35 — cooperative animations (2026-10-25)
+## Public build 35 — cooperative animations (2026-10-25)
 
 The old CPU deadline stopped valid Christmas, Fireplace and Cyberpunk frames at
 256 LEDs. Source initialization, setup and frames now run on a retained Lua
@@ -553,4 +553,32 @@ every poll; only that rerun supports the 1024-LED preset result above.
 The physical strip has fewer LEDs than the maximum configured test count; this
 validates allocation, execution and transmission at 1024, not the appearance of a
 physical 1024-LED strip. The combined-radio peak-memory caveats in
-[the low-RAM profile record](lowram-esp32.md) still apply. Build 35 is not published.
+[the low-RAM profile record](lowram-esp32.md) still apply.
+
+
+### Publication verification
+
+[Workflow 40200261033](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40200261033)
+built and published source commit `5eb10c107f4d4cc92f966f4910d6873803f0fd58`
+as build 35 on public channel 0. The original ESP32 package now uses the
+source-built DMA/Matter/BLE profile while retaining the Arduino recovery
+bootloader. All five complete installation layouts fit 4 MB.
+
+Independent production checks verified all five manifests and their ECDSA
+signatures, all 25 part sizes and SHA-256 hashes, bootloader/recovery/application
+chip IDs, and application descriptors. HTTP manifest queries and application
+downloads completed without redirects and matched the HTTPS manifests.
+
+| Chip | Application bytes | Application SHA-256 |
+| --- | ---: | --- |
+| esp32 | 2,304,480 | `58041eda3b4f6cc2c781f541a08963d84e0f8bf0befb9cd8830c56c923844213` |
+| esp32s3 | 2,241,456 | `52348d1e6792ca15f6164630d68292c966c5a1da02e1a97b99f2c58340d99783` |
+| esp32c3 | 2,289,072 | `3e09d53518e7a7f7c93494d7d204a44ff51bd18c84396ea2295e73ceda4c8d8b` |
+| esp32c5 | 2,494,400 | `3227d0b0a48e3412c667bbfcaad6dd28cde4801ace0a4a5643d20a4dce4b1b9d` |
+| esp32c6 | 2,429,488 | `069a921d3f0fee8abdf1a08d8e1249c5aeeb3a04cf8f2c95c6966f014a1dcb1e` |
+
+Setup and Studio deployments succeeded and their live entry-point asset names
+match the built distributions. iOS and Android changes are committed and pushed;
+iOS 0.1.51 (52) is installed on the paired iPhone. CLI 3.0.0 source is committed
+and pushed, but npm publication was skipped at the user's request. The API
+required no code changes for this release.
