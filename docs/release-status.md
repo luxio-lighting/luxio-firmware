@@ -471,3 +471,28 @@ not flashed or reconfigured.
 Host regressions, signature/tampering tests, API storage/publication tests,
 TypeScript checks and 65 browser installation cases passed. C6 cases include
 both 4 MB and 8 MB detected flash installing the same 4 MB layout.
+
+
+Build 33 was signed and published on channel 0 by [workflow
+40187920737](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40187920737).
+The first CI attempt exhausted hosted-runner disk space while unpacking IDF;
+the successful rerun removes unused preinstalled toolchains on disposable
+C5/C6 runners before building. All five public manifests and downloads passed
+signature, SHA-256, chip identity, 4 MB image-header and offset checks. HTTPS
+installation downloads and direct HTTP update/download routes were verified.
+Setup commit `416cbf6` deployed successfully, and its live JavaScript contains
+the five 4 MB profiles. API commit `ae79b82` was deployed by the user before
+publication, which accepted the new C5/C6 partition layouts.
+
+The C6 then completed a real signed HTTP recovery update from a USB-only
+build-32 test baseline to published build 33. The local test baseline reset
+its rollback floor to 32 for this test; that change was never committed or
+published. The production build restores the floor to 33. The test installed
+the exact published bootloader, partition table and recovery image first,
+then requested and installed the signed application through recovery.
+Identity, configuration, brightness, power and Wi-Fi were retained, and
+Matter initialized again. A USB readback SHA-256 matched the public signed
+application exactly. The first USB readback had a transport framing error;
+the OTA test was repeated successfully with readback retries. The board is
+left on the published build, with its original settings. This qualifies the
+C6 update path, not C5 hardware or physical 1,024-LED signal quality.

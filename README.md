@@ -1,6 +1,6 @@
 # Luxio firmware
 
-The firmware matrix includes Matter and a fixed Wi-Fi/HTTPS recovery loader. Firmware checks and installs are explicitly user-initiated. A reboot during an accepted download resumes that same request; it does not select a new release.
+The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware checks and installs are explicitly user-initiated. A reboot during an accepted download resumes that same request; it does not select a new release.
 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
