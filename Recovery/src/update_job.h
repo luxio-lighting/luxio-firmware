@@ -16,7 +16,10 @@
 constexpr uint32_t LUXIO_APP_SIZE = LUXIO_APP_CAPACITY;
 constexpr uint32_t LUXIO_APP_ADDRESS = LUXIO_APP_OFFSET;
 constexpr uint32_t LUXIO_LOADER_SIZE = LUXIO_LOADER_CAPACITY;
-constexpr char LUXIO_UPDATE_TARGET[] = CONFIG_IDF_TARGET "-recovery-v1";
+#ifndef LUXIO_UPDATE_LAYOUT
+#define LUXIO_UPDATE_LAYOUT CONFIG_IDF_TARGET "-recovery-v1"
+#endif
+constexpr char LUXIO_UPDATE_TARGET[] = LUXIO_UPDATE_LAYOUT;
 struct UpdateJob {
   uint32_t version = 2;
   uint32_t channel = 100;

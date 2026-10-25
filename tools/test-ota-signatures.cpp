@@ -27,5 +27,6 @@ int main() {
   bad = job; memset(bad.signature, 'a', sizeof(bad.signature)); assert(!verifySignedUpdate(bad, 31));
   bad = job; strcpy(bad.signature, WRONG_KEY_SIGNATURE); assert(!verifySignedUpdate(bad, 31));
   bad = job; strcpy(bad.signature, OTHER_CHIP_SIGNATURE); assert(!verifySignedUpdate(bad, 31));
-  puts("PASS: production MbedTLS verifier accepts Node ECDSA and rejects tampering, wrong keys/chips, URL changes and rollback");
+  bad = job; strcpy(bad.target, OTHER_LAYOUT); strcpy(bad.signature, OTHER_LAYOUT_SIGNATURE); assert(!verifySignedUpdate(bad, 31));
+  puts("PASS: production MbedTLS verifier accepts Node ECDSA and rejects tampering, wrong keys/chips/layouts, URL changes and rollback");
 }

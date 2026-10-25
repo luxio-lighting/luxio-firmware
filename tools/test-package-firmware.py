@@ -19,8 +19,10 @@ with tempfile.TemporaryDirectory(prefix='package-test-', dir=root / '.sdk') as d
     shutil.copy(root / 'targets.json', fixture / 'targets.json')
     shutil.copy(root / 'tools/package-firmware.py', fixture / 'tools/package-firmware.py')
     for target in matrix:
+        assert target['minimumFlashSize'] == 0x400000, 'Every supported board must fit 4 MB flash'
+        assert target['applicationAddress'] + target['applicationSize'] == 0x3b0000
         chip = target['chip']
-        build = fixture / 'build' / chip
+        build = fixture / 'build' / target['id']
         (build / 'main').mkdir(parents=True)
         (build / 'recovery').mkdir()
         app = bytearray(288)
@@ -55,15 +57,15 @@ with tempfile.TemporaryDirectory(prefix='package-test-', dir=root / '.sdk') as d
             table = b''.join(struct.pack('<HBBII16sI', 0x50aa, 0, subtype, address, size, label, 0) for subtype, address, size, label in applications) + bytes([255]) * 32
             (build / 'main/Luxio.ino.partitions.bin').write_bytes(table)
             (build / 'recovery/Recovery.ino.partitions.bin').write_bytes(table)
-            result = subprocess.run([sys.executable, str(fixture / 'tools/package-firmware.py'), chip], capture_output=True, text=True, env={**os.environ, 'LUXIO_FIRMWARE_BASE_URL': 'https://firmware.example/build-1'})
+            result = subprocess.run([sys.executable, str(fixture / 'tools/package-firmware.py'), target['id']], capture_output=True, text=True, env={**os.environ, 'LUXIO_FIRMWARE_BASE_URL': 'https://firmware.example/build-1'})
             assert (result.returncode == 0) == succeeds, (chip, name, result.stdout, result.stderr)
             if succeeds:
                 manifest = json.loads((build / 'release/manifest.local.json').read_text())
-                assert manifest['chip'] == chip and manifest['target'] == f'{chip}-recovery-v1'
+                assert manifest['chip'] == chip and manifest['target'] == target['target']
                 assert manifest['sha256'] == hashlib.sha256(app).hexdigest()
                 assert sorted(part['address'] for part in manifest['parts']) == [target['bootloaderAddress'], 0x8000, 0xe000, 0x10000, target['applicationAddress']]
                 assert manifest['minimumFlashSize'] == target['minimumFlashSize']
                 hosted = json.loads((build / 'release/manifest.json').read_text())
-                assert hosted['url'] == f'https://firmware.example/build-1/{chip}/luxio.bin'
-                assert 'file' not in hosted and all('file' not in part and part['url'].startswith(f'https://firmware.example/build-1/{chip}/') for part in hosted['parts'])
+                assert hosted['url'] == f'https://firmware.example/build-1/{target['id']}/luxio.bin'
+                assert 'file' not in hosted and all('file' not in part and part['url'].startswith(f'https://firmware.example/build-1/{target['id']}/') for part in hosted['parts'])
             print(f'PASS: {chip}: {name}')

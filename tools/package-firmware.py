@@ -10,9 +10,11 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
 matrix = json.loads((root / 'targets.json').read_text())
-chip = sys.argv[1] if len(sys.argv) > 1 else 'esp32s3'
-target = next(t for t in matrix if t['chip'] == chip)
-directory = root / os.environ.get('LUXIO_BUILD_ROOT', 'build') / chip
+identifier = sys.argv[1] if len(sys.argv) > 1 else 'esp32s3'
+target = next(t for t in matrix if t['id'] == identifier)
+assert target['minimumFlashSize'] == 0x400000, 'Every firmware package must fit 4 MB flash'
+chip = target['chip']
+directory = root / os.environ.get('LUXIO_BUILD_ROOT', 'build') / target['id']
 app = directory / 'main/Luxio.ino.bin'
 loader = directory / 'recovery/Recovery.ino.bin'
 raw = app.read_bytes()
@@ -33,6 +35,7 @@ for offset in range(0, len(partitions) - 31, 32):
     magic, kind, subtype, address, size, label, flags = struct.unpack_from('<HBBII16sI', partitions, offset)
     if magic != 0x50aa:
         break
+    assert address + size <= 0x400000, 'Partition exceeds 4 MB flash'
     if kind == 0:
         applications.append((subtype, address, size, label.rstrip(b'\0')))
 assert applications == [(0, 0x10000, target['recoverySize'], b'loader'), (0x10, target['applicationAddress'], target['applicationSize'], b'app0')], 'Only the fixed recovery loader and single main application layout can be packaged'
@@ -54,14 +57,14 @@ for path, name, address, capacity in [
 blank = bytes([255])*0x2000
 (output/'otadata.bin').write_bytes(blank)
 parts.append(dict(file='otadata.bin', address=0xe000, size=len(blank), sha256=hashlib.sha256(blank).hexdigest()))
-manifest = dict(build=build, chip=chip, target=f'{chip}-recovery-v1', channel=100, minimumFlashSize=target['minimumFlashSize'],
+manifest = dict(build=build, chip=chip, target=target['target'], channel=100, minimumFlashSize=target['minimumFlashSize'],
                 size=len(raw), sha256=hashlib.sha256(raw).hexdigest(), file='luxio.bin', parts=parts)
 (output/'manifest.local.json').write_text(json.dumps(manifest, indent=2)+'\n')
 base = os.environ.get('LUXIO_FIRMWARE_BASE_URL')
 if base:
     assert urlparse(base).scheme == 'https' and urlparse(base).netloc and not urlparse(base).query and not urlparse(base).fragment, 'Use an HTTPS directory URL'
     hosted = {key: value for key, value in manifest.items() if key not in ['file', 'parts']}
-    hosted['url'] = f"{base.rstrip('/')}/{chip}/luxio.bin"
-    hosted['parts'] = [{**{key: value for key, value in part.items() if key != 'file'}, 'url': f"{base.rstrip('/')}/{chip}/{part['file']}"} for part in parts]
+    hosted['url'] = f"{base.rstrip('/')}/{target['id']}/luxio.bin"
+    hosted['parts'] = [{**{key: value for key, value in part.items() if key != 'file'}, 'url': f"{base.rstrip('/')}/{target['id']}/{part['file']}"} for part in parts]
     (output / 'manifest.json').write_text(json.dumps(hosted, indent=2) + '\n')
 print(f'Build {build}: application {len(raw):,} / {target["applicationSize"]:,}; recovery {loader.stat().st_size:,} / {target["recoverySize"]:,} bytes')

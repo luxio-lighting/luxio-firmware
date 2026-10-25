@@ -12,7 +12,7 @@ root = Path(__file__).resolve().parent.parent
 os.chdir(root)
 matrix = json.loads((root / 'targets.json').read_text())
 parser = argparse.ArgumentParser()
-parser.add_argument('chip', nargs='?', default='esp32s3', choices=['all'] + [t['chip'] for t in matrix])
+parser.add_argument('chip', nargs='?', default='esp32s3', choices=['all'] + [t['id'] for t in matrix])
 args = parser.parse_args()
 cli = os.environ.get('ARDUINO_CLI') or shutil.which('arduino-cli') or '/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli'
 assert (root / '.sdk/arduino-cli.yaml').exists(), 'Run tools/bootstrap-firmware.sh first'
@@ -25,11 +25,11 @@ for name in ['partitions.csv', 'src/update_job.h', 'src/signed_update.h', 'src/o
 failed = []
 for target in matrix:
     chip = target['chip']
-    if args.chip not in ['all', chip]:
+    if args.chip not in ['all', target['id']]:
         continue
     matter = os.environ.get('LUXIO_MATTER', '1')
     assert matter in ['0', '1'], 'Invalid LUXIO_MATTER'
-    directory = root / os.environ.get('LUXIO_BUILD_ROOT', 'build') / chip
+    directory = root / os.environ.get('LUXIO_BUILD_ROOT', 'build') / target['id']
     directory.mkdir(parents=True, exist_ok=True)
     # A failed rebuild must never leave an apparently current release behind.
     shutil.rmtree(directory / 'release', ignore_errors=True)
@@ -43,12 +43,15 @@ for target in matrix:
             shutil.rmtree(source, ignore_errors=True)
             shutil.copytree(root / sketch, source)
             (source / 'partitions.csv').write_text(f"# Name,Type,SubType,Offset,Size,Flags\nnvs,data,nvs,0x9000,0x5000,\notadata,data,ota,0xe000,0x2000,\nloader,app,factory,0x10000,{target['recoverySize']:#x},\napp0,app,ota_0,{target['applicationAddress']:#x},{target['applicationSize']:#x},\nspiffs,data,spiffs,{target['minimumFlashSize']-0x50000:#x},0x40000,\ncoredump,data,coredump,{target['minimumFlashSize']-0x10000:#x},0x10000,\n")
+            if sketch == 'Luxio' and target.get('builder') == 'idf':
+                subprocess.run([sys.executable, 'tools/build-compact.py', target['id']], check=True)
+                continue
             flags = f'-DLUA_USE_C89 -DPB_ENABLE_MALLOC -fstack-usage -I{root}/Luxio/src/vendor/nanopb'
             if sketch == 'Luxio' and chip == 'esp32' and matter == '0':
                 library = root / '.sdk/user/libraries/NimBLE-Arduino/library.properties'
                 assert library.exists() and 'version=2.5.1' in library.read_text(), 'Run tools/bootstrap-firmware.sh to install NimBLE-Arduino 2.5.1'
                 flags += ' -DCONFIG_BT_NIMBLE_SM_SC=1 -DCONFIG_BT_NIMBLE_ROLE_CENTRAL=0 -DCONFIG_BT_NIMBLE_ROLE_OBSERVER=0 -DCONFIG_BT_NIMBLE_MAX_CONNECTIONS=1'
-            cpp = flags + f' -DLUXIO_BUILD={build} -DLUXIO_APP_CAPACITY={target["applicationSize"]} -DLUXIO_APP_OFFSET={target["applicationAddress"]} -DLUXIO_LOADER_CAPACITY={target["recoverySize"]} -DLUXIO_DEFAULT_GPIO={target["defaultGpio"]} -DLUXIO_MATTER={matter} -DLUXIO_CLOUD_URL="{os.environ.get("LUXIO_CLOUD_URL", "http://api.luxio.lighting")}"'
+            cpp = flags + f' -DLUXIO_BUILD={build} -DLUXIO_APP_CAPACITY={target["applicationSize"]} -DLUXIO_APP_OFFSET={target["applicationAddress"]} -DLUXIO_LOADER_CAPACITY={target["recoverySize"]} -DLUXIO_DEFAULT_GPIO={target["defaultGpio"]} -DLUXIO_UPDATE_LAYOUT="{target["target"]}" -DLUXIO_MATTER={matter} -DLUXIO_CLOUD_URL="{os.environ.get("LUXIO_CLOUD_URL", "http://api.luxio.lighting")}"'
             command = [cli, '--config-file', str(root / '.sdk/arduino-cli.yaml'), 'compile',
                        '--fqbn', target['fqbn'], '--jobs', os.environ.get('LUXIO_JOBS', '2'),
                        '--build-path', str(directory / folder)]
@@ -87,8 +90,12 @@ for target in matrix:
             subprocess.run(command + [str(source)], check=True)
             assert (directory / folder / f'{sketch}.ino.bin').stat().st_size <= capacity, f'{chip} {sketch} exceeds partition'
             (directory / folder / f'{sketch}.ino.merged.bin').unlink(missing_ok=True)
-        subprocess.run([sys.executable, 'tools/check-task-stacks.py', str(directory / 'main')], check=True)
-        subprocess.run([sys.executable, 'tools/package-firmware.py', chip], check=True)
+        if target.get('builder') == 'idf':
+            # Both images use the source-built SDK bootloader and identical table.
+            shutil.copyfile(directory / 'main/Luxio.ino.bootloader.bin', directory / 'recovery/Recovery.ino.bootloader.bin')
+        else:
+            subprocess.run([sys.executable, 'tools/check-task-stacks.py', str(directory / 'main')], check=True)
+        subprocess.run([sys.executable, 'tools/package-firmware.py', target['id']], check=True)
     except (subprocess.CalledProcessError, AssertionError) as error:
         failed.append(chip)
         print(f'FAILED {chip}: {error}', file=sys.stderr, flush=True)

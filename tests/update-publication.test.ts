@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 
 const targets = JSON.parse(await readFile('targets.json', 'utf8'));
 for (const hardware of targets) {
-  test(`publication validates ${hardware.chip} artifacts before registration`, async () => {
+  test(`publication validates ${hardware.id} artifacts before registration`, async () => {
     await mkdir('.sdk', { recursive: true });
     const directory = await mkdtemp(resolve('.sdk/publication-test-'));
     const keys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -28,7 +28,7 @@ for (const hardware of targets) {
           artifacts[url] = bytes.toString('base64');
           return { address, url, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
         });
-        const manifest = { chip: hardware.chip, target: `${hardware.chip}-recovery-v1` as string | undefined, build: 23, size: 288, url: parts[4].url, sha256: parts[4].sha256, parts };
+        const manifest = { chip: hardware.chip, target: hardware.target as string | undefined, build: 23, size: 288, url: parts[4].url, sha256: parts[4].sha256, parts };
         if (scenario === 'missing target') delete manifest.target;
         if (scenario === 'wrong target') manifest.target = 'unknown';
         if (scenario === 'wrong offsets') parts[0].address = 0x3000;

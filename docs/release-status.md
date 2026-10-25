@@ -436,3 +436,38 @@ the earlier combined-stack exhaustion or the staged animation-allocation gap.
 Source references: [NimBLE 2.5.1 configuration](https://github.com/h2zero/NimBLE-Arduino/blob/2.5.1/src/nimconfig.h),
 [security-manager source](https://raw.githubusercontent.com/h2zero/NimBLE-Arduino/2.5.1/src/nimble/nimble/host/src/ble_sm.c),
 and [Espressif security configuration](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/kconfig-reference.html#config-bt-nimble-security-enable).
+
+
+## Standard 4 MB matrix (2026-10-25)
+
+All five supported chips now use complete 4 MB installations. C5/C6 use pinned
+source SDK profiles with Thread disabled, Wi-Fi Matter enabled and encrypted
+Luxio NimBLE retained. There is one recovery target per chip and no legacy
+8 MB layout or migration path, as requested. Setup/API snapshots and packaging
+checks enforce the new partition capacities.
+
+Local build 33 package sizes in bytes:
+
+| Chip | Application | Recovery | Application capacity | Recovery capacity |
+| --- | ---: | ---: | ---: | ---: |
+| ESP32 | 2,102,304 | 1,029,584 | 2,621,440 | 1,179,648 |
+| ESP32-S3 | 2,235,632 | 1,014,736 | 2,621,440 | 1,179,648 |
+| ESP32-C3 | 2,282,976 | 1,085,056 | 2,490,368 | 1,310,720 |
+| ESP32-C5 | 2,487,984 | 1,143,712 | 2,621,440 | 1,179,648 |
+| ESP32-C6 | 2,423,040 | 1,091,104 | 2,621,440 | 1,179,648 |
+
+The connected ESP32-C6FH4 revision 0.1 was identified as 4 MB embedded flash,
+backed up and installed through USB. Boot, USB control, Wi-Fi scanning and
+settings/identity retention across restarts passed. After configuring Wi-Fi,
+Matter initialized and returned commissioning data. A 1,024-LED Lua animation
+passed 30 signed-HTTP update checks with at least 125,180 bytes free internal
+RAM and a 112,628-byte largest free block. The original settings were restored.
+A separate network stress test passed 675 WebSocket replies, 61 broadcasts and
+60 automatic PONGs. These are sampled heap values, not worst-case guarantees.
+No physical 1,024-LED strip, full C6 Matter commissioning, C6 encrypted BLE
+control session or C5 hardware was qualified in this run. The GLEDOPTO was
+not flashed or reconfigured.
+
+Host regressions, signature/tampering tests, API storage/publication tests,
+TypeScript checks and 65 browser installation cases passed. C6 cases include
+both 4 MB and 8 MB detected flash installing the same 4 MB layout.

@@ -9,7 +9,9 @@
     "fqbn": "esp32:esp32:esp32:FlashSize=4M,FlashMode=dio,PSRAM=enabled",
     "recoverySize": 1179648,
     "applicationAddress": 1245184,
-    "applicationSize": 2621440
+    "applicationSize": 2621440,
+    "id": "esp32",
+    "target": "esp32-recovery-v1"
   },
   {
     "chip": "esp32s3",
@@ -21,7 +23,9 @@
     "fqbn": "esp32:esp32:esp32s3:FlashSize=4M,FlashMode=dio,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc",
     "recoverySize": 1179648,
     "applicationAddress": 1245184,
-    "applicationSize": 2621440
+    "applicationSize": 2621440,
+    "id": "esp32s3",
+    "target": "esp32s3-recovery-v1"
   },
   {
     "chip": "esp32c3",
@@ -33,30 +37,38 @@
     "fqbn": "esp32:esp32:esp32c3:FlashSize=4M,FlashMode=dio,CDCOnBoot=cdc",
     "recoverySize": 1310720,
     "applicationAddress": 1376256,
-    "applicationSize": 2490368
+    "applicationSize": 2490368,
+    "id": "esp32c3",
+    "target": "esp32c3-recovery-v1"
   },
   {
     "chip": "esp32c5",
     "imageChipId": 23,
     "architecture": "riscv",
     "bootloaderAddress": 8192,
-    "minimumFlashSize": 8388608,
+    "minimumFlashSize": 4194304,
     "defaultGpio": 4,
-    "fqbn": "esp32:esp32:esp32c5:FlashSize=8M,FlashMode=dio,PSRAM=enabled,CDCOnBoot=cdc",
-    "recoverySize": 2097152,
-    "applicationAddress": 2162688,
-    "applicationSize": 5898240
+    "fqbn": "esp32:esp32:esp32c5:FlashSize=4M,FlashMode=dio,PSRAM=enabled,CDCOnBoot=cdc",
+    "recoverySize": 1179648,
+    "applicationAddress": 1245184,
+    "applicationSize": 2621440,
+    "id": "esp32c5",
+    "target": "esp32c5-recovery-v1",
+    "builder": "idf"
   },
   {
     "chip": "esp32c6",
     "imageChipId": 13,
     "architecture": "riscv",
     "bootloaderAddress": 0,
-    "minimumFlashSize": 8388608,
+    "minimumFlashSize": 4194304,
     "defaultGpio": 4,
-    "fqbn": "esp32:esp32:esp32c6:FlashSize=8M,FlashMode=dio,CDCOnBoot=cdc",
-    "recoverySize": 2097152,
-    "applicationAddress": 2162688,
-    "applicationSize": 5898240
+    "fqbn": "esp32:esp32:esp32c6:FlashSize=4M,FlashMode=dio,CDCOnBoot=cdc",
+    "recoverySize": 1179648,
+    "applicationAddress": 1245184,
+    "applicationSize": 2621440,
+    "id": "esp32c6",
+    "target": "esp32c6-recovery-v1",
+    "builder": "idf"
   }
 ]

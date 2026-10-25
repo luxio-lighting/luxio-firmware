@@ -22,13 +22,15 @@ const keys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const wrongKeys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const pem = keys.publicKey.export({ format: 'pem', type: 'spki' });
 await writeFile(`${root}/ota_public_key.h`, `#pragma once\nconstexpr char LUXIO_OTA_KEY_ID[] = "test-release";\nconstexpr char LUXIO_OTA_PUBLIC_KEY[] = R"KEY(${pem})KEY";\n`);
-for (const { chip } of JSON.parse(await readFile('targets.json', 'utf8'))) {
-  const manifest = { keyId: 'test-release', chip, target: `${chip}-recovery-v1`, build: 32, channel: 0, size: 123456, sha256: 'a'.repeat(64) };
+for (const { chip, target } of JSON.parse(await readFile('targets.json', 'utf8'))) {
+  const manifest = { keyId: 'test-release', chip, target, build: 32, channel: 0, size: 123456, sha256: 'a'.repeat(64) };
   const signature = sign('sha256', otaPayload(manifest), keys.privateKey).toString('base64');
   const wrong = sign('sha256', otaPayload(manifest), wrongKeys.privateKey).toString('base64');
   const other = sign('sha256', otaPayload({ ...manifest, chip: 'esp32h2' }), keys.privateKey).toString('base64');
-  await writeFile(`${root}/vector.h`, `constexpr char TEST_SIGNATURE[] = "${signature}";\nconstexpr char WRONG_KEY_SIGNATURE[] = "${wrong}";\nconstexpr char OTHER_CHIP_SIGNATURE[] = "${other}";\n`);
-  execFileSync('c++', ['-std=c++17', '-fsanitize=address,undefined', `-DCONFIG_IDF_TARGET="${chip}"`,
+  const otherTarget = 'unsupported-layout';
+  const otherLayout = sign('sha256', otaPayload({ ...manifest, target: otherTarget }), keys.privateKey).toString('base64');
+  await writeFile(`${root}/vector.h`, `constexpr char TEST_SIGNATURE[] = "${signature}";\nconstexpr char WRONG_KEY_SIGNATURE[] = "${wrong}";\nconstexpr char OTHER_LAYOUT[] = "${otherTarget}";\nconstexpr char OTHER_LAYOUT_SIGNATURE[] = "${otherLayout}";\nconstexpr char OTHER_CHIP_SIGNATURE[] = "${other}";\n`);
+  execFileSync('c++', ['-std=c++17', '-fsanitize=address,undefined', `-DCONFIG_IDF_TARGET="${chip}"`, `-DLUXIO_UPDATE_LAYOUT="${target}"`,
     `-I${root}`, `-I${source}/include`, `-I.sdk/arduino/packages/esp32/tools/esp32-arduino-libs/idf-release_v5.5-f1a1df9b-v3/${chip}/include/json/cJSON`,
     'tools/test-ota-signatures.cpp', `${source}/library/libmbedcrypto.a`, '-o', `${root}/verify-${chip}`], { stdio: 'inherit' });
   execFileSync(`${root}/verify-${chip}`, [], { stdio: 'inherit' });

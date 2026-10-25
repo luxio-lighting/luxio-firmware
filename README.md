@@ -66,10 +66,10 @@ GLEDOPTO reports no usable PSRAM and retains data GPIO16 and relay GPIO18.
 | esp32 | Xtensa | 4 MB | 0x1000 | 0x130000 | 1.125 MiB | 2.5 MiB | 16 |
 | esp32s3 | Xtensa | 4 MB | 0x0 | 0x130000 | 1.125 MiB | 2.5 MiB | 16 |
 | esp32c3 | RISC-V | 4 MB | 0x0 | 0x150000 | 1.25 MiB | 2.375 MiB | 4 |
-| esp32c5 | RISC-V | 8 MB | 0x2000 | 0x210000 | 2 MiB | 5.625 MiB | 4 |
-| esp32c6 | RISC-V | 8 MB | 0x0 | 0x210000 | 2 MiB | 5.625 MiB | 4 |
+| esp32c5 | RISC-V | 4 MB | 0x2000 | 0x130000 | 1.125 MiB | 2.5 MiB | 4 |
+| esp32c6 | RISC-V | 4 MB | 0x0 | 0x130000 | 1.125 MiB | 2.5 MiB | 4 |
 
-All profiles use DIO flash. C5/C6 need 8 MB for the full Matter application plus recovery; their pinned-SDK applications alone exceed the old 2.5 MiB slot. C3 needs a larger recovery slot than ESP32/S3. Each layout is fixed for its `<chip>-recovery-v1` target. Future incompatible layout changes need a new target version and USB migration. The build stages independent source/partition copies under `build/<chip>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
+All profiles use DIO flash and fit the complete installation—including recovery, settings, filesystem and core dump—within 4 MB. C5/C6 build ESP-IDF 5.5, Arduino 3.3.3 and Matter 1.4.1 from pinned sources in Docker, omitting Thread while retaining Matter over Wi-Fi and encrypted Luxio BLE. Build them with `python3 tools/build-firmware.py esp32c5` or `esp32c6` after SDK bootstrap; Docker must be available. C3 uses a larger recovery slot and a slightly smaller application slot. Each chip has one `<chip>-recovery-v1` target. No legacy 8 MB layout or migration path is maintained. The build stages independent source/partition copies under `build/<id>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
 
 The 256 KiB filesystem and 64 KiB core-dump partition occupy the final 320 KiB of each profile's minimum flash size. Larger physical flash chips can use these images; smaller ones are rejected by Setup. ESP32, S3 and C5 probe PSRAM at startup. S3 uses QSPI PSRAM (including the Lolin S3 Mini); OPI PSRAM is not enabled by this profile. Basic lighting and updates do not require PSRAM. All three LED frames are allocated for the configured strip length and grow when it increases; configuration is rejected if allocation fails. A smaller count releases the excess capacity on reboot. The exact LED capacity, Matter heap headroom, USB reset behavior and board wiring still require hardware qualification. Default pins are starting values, not automatic board identification.
 
@@ -187,14 +187,14 @@ controls remain available. Diagnostic builds with `LUXIO_MATTER=0` use
 `tools/bootstrap-firmware.sh`, with one peripheral connection. The explicit
 Arduino BT link anchor prevents controller RAM being released before NimBLE
 starts. Light state uses the heap to leave static DRAM for the radio.
-For S3/C3/C5/C6, `tools/build-firmware.py` creates a target-local copy of
+For the precompiled S3/C3 profiles, `tools/build-firmware.py` creates a target-local copy of
 the precompiled Matter archive and weakens five lifecycle/advertising methods.
 `matter_network_only.cpp` provides their replacements: it initializes Matter's
 logical BleLayer ABI but never initializes, advertises, handles radio events or
 reclaims the Luxio Bluetooth host. Unsupported Matter BLE advertising still
 allows IP commissioning in the SDK. The installed SDK archive is not modified.
 Method symbols are checked at build time; SDK upgrades require reviewing this
-adapter. Use the repository build script, not a direct Arduino IDE compile.
+adapter. C5/C6 compile the same adapter against the source SDK with CHIPoBLE disabled. Use the repository build script, not a direct Arduino IDE compile.
 
 Input buffers are allocated for each frame and released after processing,
 disconnect, or a three-second partial-frame timeout. Output buffers exist only

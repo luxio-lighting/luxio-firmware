@@ -12,8 +12,8 @@ if (!Number.isInteger(manifest.channel ?? 100) || (manifest.channel ?? 100) < 0 
 // Fail before any network operation if the release signer is missing or mismatched.
 signUpdate(manifest, process.env.OTA_SIGNING_KEY ?? '');
 const targets = JSON.parse(await readFile(new URL('../targets.json', import.meta.url), 'utf8'));
-const hardware = targets.find(target => target.chip === manifest.chip);
-if (!hardware || manifest.target !== `${manifest.chip}-recovery-v1`)
+const hardware = targets.find(target => target.chip === manifest.chip && target.target === manifest.target);
+if (!hardware)
   throw new Error('Only recovery firmware matching its chip can be published');
 const limits = new Map([[hardware.bootloaderAddress, 0x8000 - hardware.bootloaderAddress], [0x8000, 0x1000], [0xe000, 0x2000], [0x10000, hardware.recoverySize], [hardware.applicationAddress, hardware.applicationSize]]);
 if (!Array.isArray(manifest.parts) || manifest.parts.length !== limits.size || new Set(manifest.parts.map(part => part.address)).size !== limits.size || manifest.parts.some(part => !limits.has(part.address)))

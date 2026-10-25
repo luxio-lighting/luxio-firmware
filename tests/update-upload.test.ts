@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 
 const targets = JSON.parse(await readFile('targets.json', 'utf8'));
 for (const hardware of targets) {
-  test(`MongoDB publisher validates and uploads ${hardware.chip}`, async () => {
+  test(`MongoDB publisher validates and uploads ${hardware.id}`, async () => {
     await mkdir('.sdk', { recursive: true });
     const directory = await mkdtemp(resolve('.sdk/upload-test-'));
     const keys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -28,7 +28,7 @@ for (const hardware of targets) {
           await writeFile(resolve(directory, file), bytes);
           parts.push({ address, file, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
         }
-        const manifest = { chip: hardware.chip, target: `${hardware.chip}-recovery-v1`, build: 24, channel: 100,
+        const manifest = { chip: hardware.chip, target: hardware.target, build: 24, channel: 100,
           minimumFlashSize: hardware.minimumFlashSize, size: 288, file: 'luxio.bin', sha256: parts[4].sha256, parts };
         if (scenario === 'bad checksum') parts[4].sha256 = manifest.sha256 = '0'.repeat(64);
         const path = resolve(directory, 'manifest.local.json');

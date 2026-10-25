@@ -52,6 +52,9 @@ extern "C" {
 #ifndef LUXIO_INTERNAL_RAM_RADIOS
 #define LUXIO_INTERNAL_RAM_RADIOS 0
 #endif
+#ifndef LUXIO_MATTER_WITHOUT_PSRAM
+#define LUXIO_MATTER_WITHOUT_PSRAM 0
+#endif
 #if LUXIO_MATTER
 #include <Matter.h>
 #include <platform/CommissionableDataProvider.h>
@@ -1056,7 +1059,7 @@ void setup() {
   if (!pixels) abort();
   transition = std::make_unique<OutputTransition>(pixels + frameCapacity, pixels + frameCapacity * 2, frameCapacity);
   // Matter is optional at runtime: reserve PSRAM for rendering and controls.
-  state.matter_disabled = !LUXIO_MATTER || (!LUXIO_INTERNAL_RAM_RADIOS &&
+  state.matter_disabled = !LUXIO_MATTER || (!LUXIO_INTERNAL_RAM_RADIOS && !LUXIO_MATTER_WITHOUT_PSRAM &&
     (!psramFound() || ESP.getPsramSize() < 2 * 1024 * 1024 || ESP.getFreePsram() < 1024 * 1024));
 #if CONFIG_IDF_TARGET_ESP32
   // GPIO16/17 are PSRAM signals on original ESP32 modules. A configuration from
