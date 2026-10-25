@@ -9,7 +9,7 @@ on:
         description: Firmware build number (increase for each new release)
         type: number
         required: true
-        default: 32
+        default: 35
       publish:
         description: Upload binaries to MongoDB through the API and register updates
         type: boolean
@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Make room for source SDK container and build
-        if: matrix.chip == 'esp32c5' || matrix.chip == 'esp32c6'
+        if: matrix.chip == 'esp32' || matrix.chip == 'esp32c5' || matrix.chip == 'esp32c6'
         run: |
           # These preinstalled toolchains are unused on this disposable runner.
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup

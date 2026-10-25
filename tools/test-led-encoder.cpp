@@ -7,11 +7,12 @@ int main() {
   for (size_t count : {size_t(1), size_t(60), size_t(1024)}) {
     std::vector<uint8_t> pixels(count * 6);
     for (size_t i = 0; i < pixels.size(); i++) pixels[i] = uint8_t(i * 37 + 129);
-    for (size_t channels : {size_t(3), size_t(4), size_t(5)}) {
-      const int order3[] = {1, 0, 2}, order4[] = {0, 1, 2, 3}, order5[] = {0, 1, 2, 4, 5};
+    for (size_t channels : {size_t(3), size_t(4), size_t(5)}) for (bool grbw : {false, true}) {
+      if (grbw && channels != 4) continue;
+      const int order3[] = {1, 0, 2}, order4[] = {grbw ? 1 : 0, grbw ? 0 : 1, 2, 3}, order5[] = {0, 1, 2, 4, 5};
       const int *order = channels == 3 ? order3 : channels == 4 ? order4 : order5;
       std::vector<uint8_t> spi(count * channels * 4 + 241, 0xa5);
-      const size_t length = encodeLedSpi(reinterpret_cast<const uint8_t (*)[6]>(pixels.data()), count, channels, spi.data());
+      const size_t length = encodeLedSpi(reinterpret_cast<const uint8_t (*)[6]>(pixels.data()), count, channels, spi.data(), grbw);
       assert(length % 4 == 0 && length == count * channels * 4 + 240);
       assert(spi.back() == 0xa5);
       for (size_t byte = 0; byte < count * channels; byte++) {

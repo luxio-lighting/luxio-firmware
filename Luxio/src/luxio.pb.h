@@ -70,6 +70,11 @@ typedef struct _luxio_RelayConfig {
     bool inverted;
 } luxio_RelayConfig;
 
+/* Omitted feature settings retain their current value. Both default enabled. */
+typedef struct _luxio_FeatureConfig {
+    bool enabled;
+} luxio_FeatureConfig;
+
 typedef struct _luxio_Config {
     char name[64];
     char strip_type[8];
@@ -78,6 +83,10 @@ typedef struct _luxio_Config {
     uint32_t channel;
     bool has_relay;
     luxio_RelayConfig relay;
+    bool has_wifi;
+    luxio_FeatureConfig wifi;
+    bool has_matter;
+    luxio_FeatureConfig matter;
 } luxio_Config;
 
 typedef struct _luxio_Wifi {
@@ -245,6 +254,7 @@ extern "C" {
 
 
 
+
 #define luxio_Script_mode_ENUMTYPE luxio_Mode
 
 
@@ -259,7 +269,8 @@ extern "C" {
 /* Initializer values for message structs */
 #define luxio_Color_init_default                 {0, 0, 0, 0, 0, 0}
 #define luxio_RelayConfig_init_default           {0, 0, 0}
-#define luxio_Config_init_default                {"", "", 0, 0, 0, false, luxio_RelayConfig_init_default}
+#define luxio_FeatureConfig_init_default         {0}
+#define luxio_Config_init_default                {"", "", 0, 0, 0, false, luxio_RelayConfig_init_default, false, luxio_FeatureConfig_init_default, false, luxio_FeatureConfig_init_default}
 #define luxio_Wifi_init_default                  {"", ""}
 #define luxio_WifiNetwork_init_default           {"", 0, 0}
 #define luxio_AnimationParameter_init_default    {"", 0, 0, 0, 0, 0, 0}
@@ -272,7 +283,8 @@ extern "C" {
 #define luxio_Response_init_default              {0, "", NULL, {{NULL}, NULL}, NULL, "", "", 0, 0, "", 0, 0, NULL, 0, "", {{NULL}, NULL}, NULL, 0, {{NULL}, NULL}, false, luxio_SavedColor_init_default, 0, false, luxio_NetworkStatus_init_default, ""}
 #define luxio_Color_init_zero                    {0, 0, 0, 0, 0, 0}
 #define luxio_RelayConfig_init_zero              {0, 0, 0}
-#define luxio_Config_init_zero                   {"", "", 0, 0, 0, false, luxio_RelayConfig_init_zero}
+#define luxio_FeatureConfig_init_zero            {0}
+#define luxio_Config_init_zero                   {"", "", 0, 0, 0, false, luxio_RelayConfig_init_zero, false, luxio_FeatureConfig_init_zero, false, luxio_FeatureConfig_init_zero}
 #define luxio_Wifi_init_zero                     {"", ""}
 #define luxio_WifiNetwork_init_zero              {"", 0, 0}
 #define luxio_AnimationParameter_init_zero       {"", 0, 0, 0, 0, 0, 0}
@@ -294,12 +306,15 @@ extern "C" {
 #define luxio_RelayConfig_enabled_tag            1
 #define luxio_RelayConfig_gpio_tag               2
 #define luxio_RelayConfig_inverted_tag           3
+#define luxio_FeatureConfig_enabled_tag          1
 #define luxio_Config_name_tag                    1
 #define luxio_Config_strip_type_tag              2
 #define luxio_Config_led_count_tag               3
 #define luxio_Config_gpio_tag                    4
 #define luxio_Config_channel_tag                 5
 #define luxio_Config_relay_tag                   6
+#define luxio_Config_wifi_tag                    7
+#define luxio_Config_matter_tag                  8
 #define luxio_Wifi_ssid_tag                      1
 #define luxio_Wifi_password_tag                  2
 #define luxio_WifiNetwork_ssid_tag               1
@@ -415,16 +430,25 @@ X(a, STATIC,   SINGULAR, BOOL,     inverted,          3)
 #define luxio_RelayConfig_CALLBACK NULL
 #define luxio_RelayConfig_DEFAULT NULL
 
+#define luxio_FeatureConfig_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, BOOL,     enabled,           1)
+#define luxio_FeatureConfig_CALLBACK NULL
+#define luxio_FeatureConfig_DEFAULT NULL
+
 #define luxio_Config_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   name,              1) \
 X(a, STATIC,   SINGULAR, STRING,   strip_type,        2) \
 X(a, STATIC,   SINGULAR, UINT32,   led_count,         3) \
 X(a, STATIC,   SINGULAR, UINT32,   gpio,              4) \
 X(a, STATIC,   SINGULAR, UINT32,   channel,           5) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  relay,             6)
+X(a, STATIC,   OPTIONAL, MESSAGE,  relay,             6) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  wifi,              7) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  matter,            8)
 #define luxio_Config_CALLBACK NULL
 #define luxio_Config_DEFAULT NULL
 #define luxio_Config_relay_MSGTYPE luxio_RelayConfig
+#define luxio_Config_wifi_MSGTYPE luxio_FeatureConfig
+#define luxio_Config_matter_MSGTYPE luxio_FeatureConfig
 
 #define luxio_Wifi_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   ssid,              1) \
@@ -589,6 +613,7 @@ X(a, STATIC,   SINGULAR, STRING,   animation_error,  22)
 
 extern const pb_msgdesc_t luxio_Color_msg;
 extern const pb_msgdesc_t luxio_RelayConfig_msg;
+extern const pb_msgdesc_t luxio_FeatureConfig_msg;
 extern const pb_msgdesc_t luxio_Config_msg;
 extern const pb_msgdesc_t luxio_Wifi_msg;
 extern const pb_msgdesc_t luxio_WifiNetwork_msg;
@@ -604,6 +629,7 @@ extern const pb_msgdesc_t luxio_Response_msg;
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define luxio_Color_fields &luxio_Color_msg
 #define luxio_RelayConfig_fields &luxio_RelayConfig_msg
+#define luxio_FeatureConfig_fields &luxio_FeatureConfig_msg
 #define luxio_Config_fields &luxio_Config_msg
 #define luxio_Wifi_fields &luxio_Wifi_msg
 #define luxio_WifiNetwork_fields &luxio_WifiNetwork_msg
@@ -623,12 +649,13 @@ extern const pb_msgdesc_t luxio_Response_msg;
 #define LUXIO_LUXIO_PB_H_MAX_SIZE                luxio_State_size
 #define luxio_AnimationParameter_size            74
 #define luxio_Color_size                         36
-#define luxio_Config_size                        104
+#define luxio_Config_size                        112
+#define luxio_FeatureConfig_size                 2
 #define luxio_Gradient_size                      2458
 #define luxio_NetworkStatus_size                 256
 #define luxio_RelayConfig_size                   10
 #define luxio_SavedColor_size                    141
-#define luxio_State_size                         4443
+#define luxio_State_size                         4451
 #define luxio_WifiNetwork_size                   42
 #define luxio_Wifi_size                          100
 

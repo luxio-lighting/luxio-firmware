@@ -15,9 +15,11 @@ export const colorSchema = z.object({
   warmWhite: z.number().int().min(0).max(255).default(0), coolWhite: z.number().int().min(0).max(255).default(0),
 });
 export const configSchema = z.object({
-  name: z.string().trim().min(1).max(63), stripType: z.enum(['WS2805', 'WS2814', 'WS2812']),
+  name: z.string().trim().min(1).max(63), stripType: z.enum(['WS2805', 'WS2814', 'WS2812', 'SK6812']),
   ledCount: z.number().int().min(1).max(1024), gpio: z.number().int().min(0).max(54),
   channel: z.number().int().min(0).max(100),
+  wifi: z.object({ enabled: z.boolean() }).nullish(),
+  matter: z.object({ enabled: z.boolean() }).nullish(),
   relay: z.object({ enabled: z.boolean(), gpio: z.number().int().min(0).max(54), inverted: z.boolean() }).nullish(),
 });
 export const parameterSchema = z.object({ name: z.string().min(1).max(32), boolean: z.boolean().default(false), numberInput: z.boolean().optional(), value: z.number().finite(), defaultValue: z.number().default(0), minimum: z.number().default(0), maximum: z.number().default(0) });

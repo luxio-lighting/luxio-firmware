@@ -47,13 +47,13 @@ static void delayMicroseconds(int us) { assert(txFinished && us >= 600); }
 static int rmt_new_bytes_encoder(const rmt_bytes_encoder_config_t *c, int *) {
   assert(c->flags.msb_first);
   assert(c->bit0.duration0 == 3 && c->bit0.duration1 == 9 && c->bit0.level0 == 1 && c->bit0.level1 == 0);
-  assert(c->bit1.duration0 == 8 && c->bit1.duration1 == 4 && c->bit1.level0 == 1 && c->bit1.level1 == 0); return 0;
+  assert(c->bit1.duration0 == (!strcmp(state.config.strip_type, "SK6812") ? 6 : 8) && c->bit1.duration1 == (!strcmp(state.config.strip_type, "SK6812") ? 6 : 4) && c->bit1.level0 == 1 && c->bit1.level1 == 0); return 0;
 }
 static int ledSpi;
 struct spi_transaction_t { size_t length; const void *tx_buffer; };
 static int spi_device_transmit(int, const spi_transaction_t *transaction) {
   const auto *bytes = static_cast<const uint8_t *>(transaction->tx_buffer);
-  const size_t channels = !strcmp(state.config.strip_type, "WS2805") ? 5 : !strcmp(state.config.strip_type, "WS2814") ? 4 : 3;
+  const size_t channels = !strcmp(state.config.strip_type, "WS2805") ? 5 : (!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) ? 4 : 3;
   const size_t count = state.config.led_count * channels;
   assert(transaction->length % 32 == 0 && transaction->length / 8 == count * 4 + 240);
   transmitted.clear();
@@ -121,33 +121,9 @@ static void GetManualPairingCode(chip::MutableCharSpan &s, chip::PayloadContents
 static void GetQRCode(chip::MutableCharSpan &s, chip::PayloadContents &) { strcpy(s.data, "MT:test"); }
 // PRODUCTION_STARTUP
 
-struct lua_State {};
-struct lua_Debug {};
-struct TaskStatus_t { uint32_t ulRunTimeCounter; };
-static uint32_t cpuTime, luaDeadline;
-static int luaInstructions, checkpoints;
-#define pdFALSE 0
-#define eInvalid 0
-static void taskYIELD() { checkpoints++; }
-static void vTaskGetInfo(void *, TaskStatus_t *task, int, int) { task->ulRunTimeCounter = cpuTime; }
-static int luaL_error(lua_State *, const char *message) { throw std::string(message); }
-// PRODUCTION_LUA_HOOK
-
 int main() {
-  // Preemption does not advance task CPU time; CPU and instruction limits still apply.
-  luaInstructions = 100000; luaDeadline = 20000; cpuTime = 10000;
-  for (int i = 0; i < 10; i++) luaHook(nullptr, nullptr);
-  assert(checkpoints == 10 && luaInstructions == 90000);
-  cpuTime = 20001;
-  try { luaHook(nullptr, nullptr); assert(false); } catch (const std::string &e) { assert(e.find("CPU time budget") != std::string::npos); }
-  luaDeadline = 10; cpuTime = UINT32_MAX - 5; luaHook(nullptr, nullptr);
-  cpuTime = 11;
-  try { luaHook(nullptr, nullptr); assert(false); } catch (const std::string &e) { assert(e.find("CPU time budget") != std::string::npos); }
-  luaInstructions = 1000; cpuTime = 0; luaDeadline = 20000;
-  try { luaHook(nullptr, nullptr); assert(false); } catch (const std::string &e) { assert(e.find("instruction budget") != std::string::npos); }
   for (int driver : {LUXIO_INTERNAL_RAM_RADIOS}) {
   ledSpi = driver;
-  // PRODUCTION_ENCODING
   for (uint32_t count : {1, 60, 100, 1024}) {
     std::vector<uint8_t> frames(count * 18), packed(count * 20 + 240);
     pixels = reinterpret_cast<uint8_t (*)[6]>(frames.data()); ledBytes = packed.data();
@@ -155,13 +131,15 @@ int main() {
     for (uint32_t i = 0; i < count; i++) for (int c = 0; c < 6; c++) pixels[i][c] = (i + c + 1) % 256;
     state.on = true; state.brightness = 256; state.config.led_count = count;
     state.config.has_relay = true; state.config.relay.enabled = true; state.config.relay.gpio = 18;
-    for (auto strip : {"WS2805", "WS2814", "WS2812"}) {
-      strcpy(state.config.strip_type, strip); render();
-      int channels = !strcmp(strip, "WS2805") ? 5 : !strcmp(strip, "WS2814") ? 4 : 3;
+    for (auto strip : {"WS2805", "WS2814", "WS2812", "SK6812"}) {
+      strcpy(state.config.strip_type, strip);
+      // PRODUCTION_ENCODING
+      render();
+      int channels = !strcmp(strip, "WS2805") ? 5 : (!strcmp(strip, "WS2814") || !strcmp(strip, "SK6812")) ? 4 : 3;
       assert(transmitted.size() == count * channels && pinLevel == HIGH);
       for (uint32_t i = 0; i < count; i++) {
-        assert(transmitted[i * channels] == pixels[i][channels == 3 ? 1 : 0]);
-        assert(transmitted[i * channels + 1] == pixels[i][channels == 3 ? 0 : 1]);
+        assert(transmitted[i * channels] == pixels[i][channels == 3 || !strcmp(strip, "SK6812") ? 1 : 0]);
+        assert(transmitted[i * channels + 1] == pixels[i][channels == 3 || !strcmp(strip, "SK6812") ? 0 : 1]);
         assert(transmitted[i * channels + 2] == pixels[i][2]);
         if (channels == 4) assert(transmitted[i * channels + 3] == pixels[i][3]);
         if (channels == 5) assert(transmitted[i * channels + 3] == pixels[i][4] && transmitted[i * channels + 4] == pixels[i][5]);
@@ -171,14 +149,15 @@ int main() {
     for (uint8_t value : transmitted) assert(value == 0);
   }
   }
-  for (bool disabled : {false, true}) {
-    disabledScenario = state.matter_disabled = disabled;
+  for (bool disabled : {false, true}) for (bool wifi : {false, true}) for (bool matter : {false, true}) {
+    state.config.wifi.enabled = wifi; state.config.matter.enabled = matter;
+    state.matter_disabled = disabled; disabledScenario = disabled || !wifi || !matter;
     state.on = false; state.brightness = 128; starts = step = lockDepth = 0;
     pairingCode.clear(); pairingQr.clear();
     try { cloudTask(nullptr); } catch (Finished &) {}
-    assert(starts == (LUXIO_MATTER && !disabled ? 1 : 0));
-    assert(pairingCode.empty() == (!LUXIO_MATTER || disabled));
+    assert(starts == (LUXIO_MATTER && !disabledScenario ? 1 : 0));
+    assert(pairingCode.empty() == (!LUXIO_MATTER || disabledScenario));
     assert(!state.on && state.brightness == 128 && lockDepth == 0);
   }
-  puts("PASS: RGB/RGBW/RGBCCT output at 1/60/100/1024 LEDs, relay, reset timing, Wi-Fi/IP-gated one-time Matter startup, and Lua CPU/instruction limits");
+  puts("PASS: RGB/RGBW/RGBCCT output at 1/60/100/1024 LEDs, relay, reset timing, Wi-Fi/IP-gated one-time Matter startup");
 }

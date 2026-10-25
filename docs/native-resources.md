@@ -20,7 +20,7 @@ State reports `active_color_id`, `active_gradient_id`, and `active_script_id` on
 
 ## Storage
 
-Colors use `LXC1`, gradients `LXG1`: four-byte magic, little-endian payload length, CRC-32, and the Protobuf payload. CRC covers the header and body except the checksum field. Lua retains the losslessly compressed `LXS1` format. All libraries share free filesystem space; no fixed quotas reserve unused capacity. Saving writes a temporary file, flushes and verifies it, then atomically renames it. An 8 KiB reserve protects replacement operations. No automatic eviction occurs.
+Colors use `LXC1`, gradients `LXG1`: four-byte magic, little-endian payload length, CRC-32, and the Protobuf payload. CRC covers the header and body except the checksum field. Lua retains the losslessly compressed `LXS1` format. All libraries share free filesystem space; no fixed quotas reserve unused capacity. Saving writes a temporary file, flushes and verifies it, then atomically renames it. A 40 KiB reserve protects atomic update-snapshot and library replacement operations. No automatic eviction occurs.
 
 ## Existing Lua gradients
 

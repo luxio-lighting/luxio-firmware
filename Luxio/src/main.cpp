@@ -92,17 +92,23 @@ static bool activeRelayInverted, relayPowered;
 #ifndef LUXIO_DEFAULT_GPIO
 #define LUXIO_DEFAULT_GPIO 16
 #endif
-static lua_State *animation;
+static lua_State *animation, *animationThread;
+static uint8_t (*animationPixels)[6];
+static uint8_t animationPhase;
+static bool animationPending, animationFrameReady;
+static uint32_t animationFrameAt, luaSliceDeadline, luaCpuRemaining;
+static const char *luaBudgetError;
 static char *activeAnimationSource;
 static size_t luaMemory;
 static char animationError[160];
-static uint32_t luaDeadline, animationStarted, lastFrame, lastSave;
+static uint32_t luaDeadline, animationStarted, lastFrame;
 static int luaInstructions;
-static bool dirty, wifiPending, rebootPending;
+static bool wifiPending, rebootPending;
+static uint32_t radioRestartAt;
 static String wifiSsid, wifiPassword;
 static std::atomic<uint32_t> wifiDisconnectCount{0}, wifiDisconnectReason{0};
 static bool wifiScanning, wifiScanPending;
-static luxio_WifiNetwork wifiNetworks[32];
+static std::unique_ptr<luxio_WifiNetwork[]> wifiNetworks;
 static pb_size_t wifiNetworkCount;
 static String wifiScanError;
 static uint32_t availableBuild;
@@ -114,6 +120,8 @@ static String updateError;
 static int hardwareRandom(void *, unsigned char *output, size_t length) { esp_fill_random(output, length); return 0; }
 static void stopAnimation() {
   if (animation) lua_close(animation);
+  animationThread = nullptr; animationPending = animationFrameReady = false;
+  free(animationPixels); animationPixels = nullptr;
   free(activeAnimationSource); activeAnimationSource = nullptr; state.animation_revision = 0;
   state.animation_preview_count = 0; memset(state.animation_preview, 0, sizeof(state.animation_preview));
   state.parameters_count = 0; memset(state.parameters, 0, sizeof(state.parameters));
@@ -145,10 +153,10 @@ static void render() {
     }
   }
   const bool rgbcct = !strcmp(state.config.strip_type, "WS2805");
-  const bool rgbw = !strcmp(state.config.strip_type, "WS2814");
+  const bool rgbw = (!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812"));
   const int channels = rgbcct ? 5 : rgbw ? 4 : 3;
 #if LUXIO_INTERNAL_RAM_RADIOS
-  const size_t length = encodeLedSpi(transition->displayed, state.config.led_count, channels, ledBytes);
+  const size_t length = encodeLedSpi(transition->displayed, state.config.led_count, channels, ledBytes, !strcmp(state.config.strip_type, "SK6812"));
   spi_transaction_t transaction = {};
   transaction.length = length * 8;
   transaction.tx_buffer = ledBytes;
@@ -156,8 +164,9 @@ static void render() {
 #else
   size_t position = 0;
   for (uint32_t i = 0; i < state.config.led_count; i++) {
-    // WS2805: R,G,B,W1(warm),W2(cool); WS2814: R,G,B,W; WS2812: G,R,B.
-    const int order[5] = {channels == 3 ? 1 : 0, channels == 3 ? 0 : 1, 2, rgbcct ? 4 : 3, 5};
+    // WS2805: R,G,B,W1(warm),W2(cool); WS2814: R,G,B,W; SK6812: G,R,B,W; WS2812: G,R,B.
+    const bool greenFirst = channels == 3 || !strcmp(state.config.strip_type, "SK6812");
+    const int order[5] = {greenFirst ? 1 : 0, greenFirst ? 0 : 1, 2, rgbcct ? 4 : 3, 5};
     for (int c = 0; c < channels; c++) {
       ledBytes[position++] = transition->displayed[i][order[c]];
     }
@@ -192,12 +201,19 @@ static void *luaAllocator(void *, void *ptr, size_t oldSize, size_t newSize) {
 }
 static void luaHook(lua_State *L, lua_Debug *) {
   luaInstructions -= 1000;
-  if (luaInstructions <= 0) luaL_error(L, "Animation exceeded its instruction budget");
-  // Account for this task's CPU time, not time spent preempted by Wi-Fi/TLS.
-  // A yield checkpoints the current running interval in FreeRTOS's counter.
+  if (luaInstructions <= 0) luaBudgetError = "Animation exceeded its instruction limit (1,000,000 per call)";
+  // Checkpoint this task's CPU time, excluding time spent preempted by radios.
   taskYIELD(); TaskStatus_t current;
   vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
-  if (int32_t(uint32_t(current.ulRunTimeCounter) - luaDeadline) > 0) luaL_error(L, "Animation exceeded its CPU time budget");
+  const uint32_t now = uint32_t(current.ulRunTimeCounter);
+  if (int32_t(now - luaDeadline) >= 0) luaBudgetError = "Animation exceeded its CPU limit (500 ms per call)";
+  // Yield from the hook, not an error that a script could swallow with pcall.
+  // The owner checks hard limits after resume and can destroy the entire VM.
+  if (lua_isyieldable(L) && (luaBudgetError || int32_t(now - luaSliceDeadline) >= 0)) {
+    lua_yield(L, 0);
+    return;
+  }
+  if (luaBudgetError) luaL_error(L, "%s", luaBudgetError);
 }
 static String startAnimation(luxio_Script &script) {
   std::unique_ptr<luxio_AnimationParameter[]> parameters(new (std::nothrow) luxio_AnimationParameter[16]{}); pb_size_t count = 0;
@@ -215,12 +231,20 @@ static String startAnimation(luxio_Script &script) {
   state.animation_preview_count = previewCount; memcpy(state.animation_preview, preview.get(), sizeof(state.animation_preview));
   animationError[0] = 0;
   state.parameters_count = count; memcpy(state.parameters, parameters.get(), sizeof(state.parameters));
+#if LUXIO_INTERNAL_RAM_RADIOS
+  animationPixels = static_cast<uint8_t (*)[6]>(heap_caps_calloc(state.config.led_count, 6, MALLOC_CAP_INTERNAL | MALLOC_CAP_IRAM_8BIT));
+#else
+  animationPixels = static_cast<uint8_t (*)[6]>(psramFound() ? ps_calloc(state.config.led_count, 6) : calloc(state.config.led_count, 6));
+#endif
+  if (!animationPixels) { stopAnimation(); return "Not enough memory for the animation frame"; }
   animation = lua_newstate(luaAllocator, nullptr);
   if (!animation) { stopAnimation(); return "Unable to allocate Lua engine"; }
   lua_State *L = animation;
   // Library registration allocates too; protect it so low RAM returns an error
   // instead of invoking Lua's panic handler and rebooting the controller.
   lua_pushcfunction(L, [](lua_State *L) -> int {
+    animationThread = lua_newthread(L);
+    lua_setfield(L, LUA_REGISTRYINDEX, "luxio.loop"); // Keep the coroutine alive until VM teardown.
     luaL_requiref(L, "_G", luaopen_base, 1); lua_pop(L, 1);
     luaL_requiref(L, LUA_MATHLIBNAME, luaopen_math, 1); lua_pop(L, 1);
     luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1); lua_pop(L, 1);
@@ -229,7 +253,7 @@ static String startAnimation(luxio_Script &script) {
     for (const char *name : {"dofile", "loadfile", "load", "collectgarbage", "print"}) { lua_pushnil(L); lua_setglobal(L, name); }
     lua_pushcfunction(L, [](lua_State *L) -> int { lua_pushinteger(L, state.config.led_count); return 1; }); lua_setglobal(L, "luxio_get_pixel_count");
     lua_pushcfunction(L, [](lua_State *L) -> int {
-      lua_pushstring(L, !strcmp(state.config.strip_type, "WS2805") ? "RGBCCT" : !strcmp(state.config.strip_type, "WS2814") ? "RGBW" : "RGB");
+      lua_pushstring(L, !strcmp(state.config.strip_type, "WS2805") ? "RGBCCT" : (!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) ? "RGBW" : "RGB");
       return 1;
     }); lua_setglobal(L, "luxio_get_color_type");
     lua_pushcfunction(L, [](lua_State *L) -> int { lua_pushinteger(L, millis() - animationStarted); return 1; }); lua_setglobal(L, "luxio_millis");
@@ -238,8 +262,8 @@ static String startAnimation(luxio_Script &script) {
       if (index < 0 || index >= int(state.config.led_count)) return luaL_error(L, "Pixel index out of range (zero-based)");
       int values[6];
       for (int c = 0; c < 6; c++) { values[c] = luaL_optinteger(L, c + 2, 0); if (values[c] < 0 || values[c] > 255) return luaL_error(L, "Channels must be 0-255"); }
-      if ((!strcmp(state.config.strip_type, "WS2805") && values[3]) || (!strcmp(state.config.strip_type, "WS2814") && (values[4] || values[5])) || (!strcmp(state.config.strip_type, "WS2812") && (values[3] || values[4] || values[5]))) return luaL_error(L, "Channel unavailable on this strip type");
-      for (int c = 0; c < 6; c++) pixels[index][c] = values[c];
+      if ((!strcmp(state.config.strip_type, "WS2805") && values[3]) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (values[4] || values[5])) || (!strcmp(state.config.strip_type, "WS2812") && (values[3] || values[4] || values[5]))) return luaL_error(L, "Channel unavailable on this strip type");
+      for (int c = 0; c < 6; c++) animationPixels[index][c] = values[c];
       return 0;
     }); lua_setglobal(L, "luxio_set_pixel_color");
     lua_pushcfunction(L, [](lua_State *L) -> int {
@@ -258,21 +282,16 @@ static String startAnimation(luxio_Script &script) {
   if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
     String error = lua_tostring(L, -1); stopAnimation(); return error;
   }
-  luaInstructions = 100000;
-  taskYIELD(); TaskStatus_t current;
-  vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
-  luaDeadline = uint32_t(current.ulRunTimeCounter) + max(uint32_t(30000), state.config.led_count * 80u);
-  lua_sethook(L, luaHook, LUA_MASKCOUNT, 1000);
-  transition->begin(millis());
-  animationStarted = millis(); memset(pixels, 0, frameCapacity * 6);
-  if (luaL_loadbuffer(L, source, strlen(source), "Luxio animation") != LUA_OK || lua_pcall(L, 0, 0, 0) != LUA_OK) {
-    String error = lua_tostring(L, -1); stopAnimation(); return error;
+  // Compile synchronously so syntax errors still reject SET_SCRIPT. User code,
+  // setup(), and loop() all execute cooperatively outside the request handler.
+  if (luaL_loadbuffer(animationThread, source, strlen(source), "Luxio animation") != LUA_OK) {
+    String error = lua_tostring(animationThread, -1); stopAnimation(); return error;
   }
-  lua_getglobal(L, "setup");
-  if (lua_isnil(L, -1)) lua_pop(L, 1);
-  else if (lua_pcall(L, 0, 0, 0) != LUA_OK) { String error = lua_tostring(L, -1); stopAnimation(); return error; }
-  lua_getglobal(L, "loop"); bool valid = lua_isfunction(L, -1); lua_pop(L, 1);
-  if (!valid) { stopAnimation(); return "Define a loop() function"; }
+  lua_sethook(animationThread, luaHook, LUA_MASKCOUNT, 1000);
+  luaInstructions = 1000000; luaCpuRemaining = 500000; luaBudgetError = nullptr;
+  animationStarted = millis(); animationFrameAt = animationStarted;
+  animationPhase = 0; animationPending = true;
+  transition->begin(millis());
   state.animation_revision = esp_random() | 1;
   return "";
 }
@@ -282,6 +301,60 @@ static bool validId(const char *id) {
   return true;
 }
 struct ScriptPage { uint32_t offset; uint32_t *next; };
+// Save output only for a firmware update, never for ordinary lighting changes.
+// Stream the Lua source directly to flash: do not allocate another 16 KiB copy.
+static bool saveUpdateState() {
+  auto snapshot = std::unique_ptr<luxio_Response>(new (std::nothrow) luxio_Response{});
+  std::unique_ptr<luxio_Script> script;
+  if (!snapshot) return false;
+  snapshot->state = &state;
+  if (animation && activeAnimationSource && state.mode == luxio_Mode_ANIMATION) {
+    script.reset(new (std::nothrow) luxio_Script{});
+    if (!script) return false;
+    strlcpy(script->id, state.active_script_id, sizeof(script->id));
+    strlcpy(script->name, state.script_name, sizeof(script->name));
+    script->source = activeAnimationSource; script->mode = luxio_Mode_ANIMATION;
+    // Active parameters already live in State; copy them back before booting Lua.
+    snapshot->script = script.get();
+  }
+  File file = LittleFS.open("/startup.pending", "w");
+  const uint8_t header[8] = {'L', 'X', 'B', '1', 0, 0, 0, 0};
+  if (!file || file.write(header, sizeof(header)) != sizeof(header)) { file.close(); LittleFS.remove("/startup.pending"); return false; }
+  struct Writer { File *file; uint32_t crc; } writer{&file, 0xffffffff};
+  pb_ostream_t output = {};
+  output.state = &writer; output.max_size = 32768;
+  output.callback = [](pb_ostream_t *stream, const pb_byte_t *bytes, size_t count) -> bool {
+    auto *writer = static_cast<Writer *>(stream->state);
+    if (writer->file->write(bytes, count) != count) return false;
+    for (size_t i = 0; i < count; i++) {
+      writer->crc ^= bytes[i];
+      for (int bit = 0; bit < 8; bit++) writer->crc = (writer->crc >> 1) ^ (0xedb88320u & (0u - (writer->crc & 1)));
+    }
+    return true;
+  };
+  bool written = pb_encode(&output, luxio_Response_fields, snapshot.get());
+  uint32_t crc = ~writer.crc;
+  const uint8_t checksum[4] = {uint8_t(crc), uint8_t(crc >> 8), uint8_t(crc >> 16), uint8_t(crc >> 24)};
+  written = written && file.seek(4) && file.write(checksum, 4) == 4;
+  file.flush(); file.close();
+  // Verify the complete payload before atomically replacing the previous boot state.
+  File verify = LittleFS.open("/startup.pending", "r");
+  written = written && verify.size() == output.bytes_written + 8 && verify.seek(8);
+  uint8_t bytes[64]; uint32_t readCrc = 0xffffffff; size_t remaining = output.bytes_written;
+  while (written && remaining) {
+    size_t count = min(remaining, sizeof(bytes));
+    if (verify.read(bytes, count) != count) { written = false; break; }
+    for (size_t i = 0; i < count; i++) {
+      readCrc ^= bytes[i];
+      for (int bit = 0; bit < 8; bit++) readCrc = (readCrc >> 1) ^ (0xedb88320u & (0u - (readCrc & 1)));
+    }
+    remaining -= count;
+  }
+  verify.close();
+  if (!written || ~readCrc != crc || !LittleFS.rename("/startup.pending", "/startup.pb")) { LittleFS.remove("/startup.pending"); return false; }
+  return true;
+}
+
 static bool listScripts(pb_ostream_t *stream, const pb_field_t *field, void * const *arg) {
   auto &page = *static_cast<ScriptPage *>(*arg);
   *page.next = 0;
@@ -380,22 +453,25 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
     case luxio_Operation_SET_COLOR: {
       auto &c = request->color;
       if (!request->has_color || c.red > 255 || c.green > 255 || c.blue > 255 || c.white > 255 || c.warm_white > 255 || c.cool_white > 255) { error = "Invalid color"; break; }
-      if ((!strcmp(state.config.strip_type, "WS2805") && c.white) || (!strcmp(state.config.strip_type, "WS2814") && (c.warm_white || c.cool_white)) || (!strcmp(state.config.strip_type, "WS2812") && (c.white || c.warm_white || c.cool_white))) { error = "Channel unavailable on this strip type"; break; }
+      if ((!strcmp(state.config.strip_type, "WS2805") && c.white) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (c.warm_white || c.cool_white)) || (!strcmp(state.config.strip_type, "WS2812") && (c.white || c.warm_white || c.cool_white))) { error = "Channel unavailable on this strip type"; break; }
       stopAnimation(); state.color = c; state.on = true; applyColor(); break;
     }
     case luxio_Operation_SET_BRIGHTNESS:
       if (request->brightness < 1 || request->brightness > 256) error = "Brightness must be 1-256";
-      else { if (state.brightness != request->brightness) transition->begin(millis()); state.brightness = request->brightness; dirty = true; }
+      else { if (state.brightness != request->brightness) transition->begin(millis()); state.brightness = request->brightness; }
       break;
     case luxio_Operation_SET_POWER:
       if (state.on != request->on) transition->begin(millis());
-      state.on = request->on; dirty = true; break;
+      state.on = request->on; break;
     case luxio_Operation_SET_CONFIG: {
       auto &c = request->config;
       String name = c.name; name.trim();
       // Old clients do not know this field; ordinary settings edits retain it.
+      if (!c.has_wifi) { c.has_wifi = true; c.wifi = state.config.wifi; }
+      if (!c.has_matter) { c.has_matter = true; c.matter = state.config.matter; }
+      if (radioRestartAt) { error = "Radio settings are restarting the device"; break; }
       if (!c.has_relay) { c.has_relay = state.config.has_relay; c.relay = state.config.relay; }
-      if (!request->has_config || !name.length() || c.led_count < 1 || c.led_count > 1024 || c.channel > 100 || (!GPIO_IS_VALID_OUTPUT_GPIO(c.gpio)) || (strcmp(c.strip_type, "WS2805") && strcmp(c.strip_type, "WS2814") && strcmp(c.strip_type, "WS2812"))) { error = "Invalid strip configuration"; break; }
+      if (!request->has_config || !name.length() || c.led_count < 1 || c.led_count > 1024 || c.channel > 100 || (!GPIO_IS_VALID_OUTPUT_GPIO(c.gpio)) || (strcmp(c.strip_type, "WS2805") && strcmp(c.strip_type, "WS2814") && strcmp(c.strip_type, "WS2812") && strcmp(c.strip_type, "SK6812"))) { error = "Invalid strip configuration"; break; }
       if (c.has_relay && c.relay.enabled && (c.relay.gpio == c.gpio || !GPIO_IS_VALID_OUTPUT_GPIO(c.relay.gpio))) { error = "Relay GPIO must be a separate valid output pin"; break; }
       // Reserve the active serial interfaces and the chip's flash/PSRAM pins.
       const uint32_t pins[] = {c.gpio, c.has_relay && c.relay.enabled ? c.relay.gpio : c.gpio};
@@ -463,17 +539,51 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         digitalWrite(activeRelayGpio, activeRelayInverted ? HIGH : LOW);
         pinMode(activeRelayGpio, INPUT); activeRelayGpio = -1; relayPowered = false;
       }
-      if (c.gpio != state.config.gpio || c.led_count != state.config.led_count || strcmp(c.strip_type, state.config.strip_type)) { stopAnimation(); state.color = {}; memset(pixels, 0, frameCapacity * 6); memset(transition->displayed, 0, frameCapacity * 6); transition->active = false; }
-      state.config = c; strlcpy(state.config.name, name.c_str(), sizeof(state.config.name)); dirty = true;
-      MDNS.setInstanceName(state.config.name);
-      MDNS.addServiceTxt("luxio", "tcp", "strip", (const char *)c.strip_type);
+      if (c.gpio != state.config.gpio || c.led_count != state.config.led_count || strcmp(c.strip_type, state.config.strip_type)) {
+        // Configuration after first boot must not discard the default gradient.
+        // Keep static output whenever its channels remain valid for the new strip.
+        if (state.mode == luxio_Mode_GRADIENT && state.has_gradient && validGradient(state.gradient, c.strip_type)) {
+          renderGradient(state.gradient, pixels, c.led_count);
+        } else {
+          stopAnimation();
+          if (!validColor(state.color, c.strip_type)) state.color = {0, 210, 255, 0, 0, 0};
+          for (uint32_t i = 0; i < c.led_count; i++) {
+            pixels[i][0] = state.color.red; pixels[i][1] = state.color.green; pixels[i][2] = state.color.blue;
+            pixels[i][3] = state.color.white; pixels[i][4] = state.color.warm_white; pixels[i][5] = state.color.cool_white;
+          }
+        }
+        memset(transition->displayed, 0, frameCapacity * 6); transition->active = false;
+      }
+      const bool radioChanged = c.wifi.enabled != state.config.wifi.enabled || c.matter.enabled != state.config.matter.enabled;
+#if !LUXIO_INTERNAL_RAM_RADIOS
+      if (!strcmp(c.strip_type, "SK6812") != !strcmp(state.config.strip_type, "SK6812")) {
+        rmt_bytes_encoder_config_t encoding = {};
+        encoding.bit0 = {.duration0 = 3, .level0 = 1, .duration1 = 9, .level1 = 0};
+        encoding.bit1 = {.duration0 = uint16_t(!strcmp(c.strip_type, "SK6812") ? 6 : 8), .level0 = 1, .duration1 = uint16_t(!strcmp(c.strip_type, "SK6812") ? 6 : 4), .level1 = 0};
+        encoding.flags.msb_first = 1;
+        ESP_ERROR_CHECK(rmt_bytes_encoder_update_config(ledEncoder, &encoding));
+      }
+#endif
+      strlcpy(c.name, name.c_str(), sizeof(c.name));
+      uint8_t saved[luxio_Config_size], previous[luxio_Config_size];
+      auto encoder = pb_ostream_from_buffer(saved, sizeof(saved));
+      if (!pb_encode(&encoder, luxio_Config_fields, &c)) { error = "Unable to encode settings"; break; }
+      const size_t previousSize = prefs.getBytesLength("config");
+      const bool unchanged = previousSize == encoder.bytes_written && prefs.getBytes("config", previous, previousSize) == previousSize && !memcmp(previous, saved, previousSize);
+      if (!unchanged && prefs.putBytes("config", saved, encoder.bytes_written) != encoder.bytes_written) { error = "Unable to save settings"; break; }
+      state.config = c; animationFrameReady = true; // Apply relay changes even during a long frame.
+      if (radioChanged) radioRestartAt = millis() + 1000;
+      if (httpServer) MDNS.setInstanceName(state.config.name);
+      if (httpServer) MDNS.addServiceTxt("luxio", "tcp", "strip", (const char *)c.strip_type);
       break;
     }
     case luxio_Operation_SET_WIFI:
+      if (!state.config.wifi.enabled) { error = "Enable Wi-Fi before configuring a network"; break; }
       if (!request->has_wifi || !strlen(request->wifi.ssid)) error = "Wi-Fi SSID is required";
       else { prefs.putString("ssid", request->wifi.ssid); prefs.putString("password", request->wifi.password); wifiSsid = request->wifi.ssid; wifiPassword = request->wifi.password; wifiPending = true; }
       break;
     case luxio_Operation_SCAN_WIFI:
+      if (!state.config.wifi.enabled) { error = "Wi-Fi is disabled"; break; }
       if (!wifiScanning) {
         wifiScanning = wifiScanPending = true;
         wifiNetworkCount = 0; wifiScanError = "";
@@ -504,7 +614,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!stored) { error = "Not enough memory for saved gradient"; break; }
       const size_t storedSize = encodeStoredGradient(gradient, stored.get(), capacity);
       if (!storedSize) { error = "Unable to encode gradient"; break; }
-      if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 8192) { error = "Storage is full; delete a saved animation or gradient"; break; }
+      if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 40960) { error = "Storage is full; delete a saved animation or gradient"; break; }
       String path = String("/gradients/") + gradient.id + ".pb";
       File file = LittleFS.open("/gradients/pending", "w");
       bool written = file && file.write(stored.get(), storedSize) == storedSize;
@@ -526,7 +636,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!LittleFS.exists(path)) { error = "Gradient not found"; break; }
       if (request->operation == luxio_Operation_DELETE_GRADIENT) {
         if (!LittleFS.remove(path)) { error = "Unable to delete gradient"; break; }
-        if (!strcmp(state.active_gradient_id, request->gradient_id)) { stopAnimation(); applyColor(); dirty = true; }
+        if (!strcmp(state.active_gradient_id, request->gradient_id)) { stopAnimation(); applyColor(); }
         break;
       }
       File file = LittleFS.open(path, "r"); size_t size = file.size();
@@ -541,7 +651,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         stopAnimation(); transition->begin(millis());
         state.gradient = *responseGradient; state.has_gradient = true;
         strlcpy(state.active_gradient_id, request->gradient_id, sizeof(state.active_gradient_id));
-        state.mode = luxio_Mode_GRADIENT; state.on = true; dirty = true;
+        state.mode = luxio_Mode_GRADIENT; state.on = true;
         renderGradient(state.gradient, pixels, state.config.led_count);
       }
       break;
@@ -564,7 +674,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!stored) { error = "Not enough memory for saved color"; break; }
       const size_t storedSize = encodeStoredColor(saved_color, stored.get(), capacity);
       if (!storedSize) { error = "Unable to encode color"; break; }
-      if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 8192) { error = "Storage is full; delete a saved animation or color"; break; }
+      if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 40960) { error = "Storage is full; delete a saved animation or color"; break; }
       String path = String("/colors/") + saved_color.id + ".pb";
       File file = LittleFS.open("/colors/pending", "w");
       bool written = file && file.write(stored.get(), storedSize) == storedSize;
@@ -585,7 +695,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!LittleFS.exists(path)) { error = "Color not found"; break; }
       if (request->operation == luxio_Operation_DELETE_COLOR) {
         if (!LittleFS.remove(path)) { error = "Unable to delete color"; break; }
-        if (!strcmp(state.active_color_id, request->color_id)) { stopAnimation(); applyColor(); dirty = true; }
+        if (!strcmp(state.active_color_id, request->color_id)) { stopAnimation(); applyColor(); }
         break;
       }
       File file = LittleFS.open(path, "r"); size_t size = file.size();
@@ -600,13 +710,13 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         stopAnimation(); transition->begin(millis());
         state.color = response->saved_color.color;
         strlcpy(state.active_color_id, request->color_id, sizeof(state.active_color_id));
-        state.mode = luxio_Mode_COLOR; state.on = true; dirty = true;
+        state.mode = luxio_Mode_COLOR; state.on = true;
         applyColor();
       }
       break;
     }
     case luxio_Operation_STOP_GRADIENT:
-      if (state.mode == luxio_Mode_GRADIENT) { stopAnimation(); applyColor(); dirty = true; }
+      if (state.mode == luxio_Mode_GRADIENT) { stopAnimation(); applyColor(); }
       break;
     case luxio_Operation_LIST_SCRIPTS: response->scripts.funcs.encode = listScripts; response->scripts.arg = &page; break;
     case luxio_Operation_CREATE_SCRIPT:
@@ -633,7 +743,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       const size_t storedSize = encodeStoredScript(script, stored.get(), capacity);
       if (!storedSize) { error = "Unable to encode animation"; break; }
       // LittleFS needs free blocks for atomic replacement and metadata updates.
-      if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 8192) { error = "Storage is full; delete a saved color, gradient, or animation"; break; }
+      if (LittleFS.totalBytes() - LittleFS.usedBytes() < storedSize + 40960) { error = "Storage is full; delete a saved color, gradient, or animation"; break; }
       String path = String("/scripts/") + script.id + ".pb";
       File file = LittleFS.open("/scripts/pending", "w");
       bool written = file && file.write(stored.get(), storedSize) == storedSize;
@@ -684,7 +794,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         if (responseScript->mode == luxio_Mode_GRADIENT) { error = "Legacy Lua gradient: migrate it to gradient storage"; break; }
         error = startAnimation(*responseScript);
         if (!error.length()) {
-          state.on = true; dirty = true;
+          state.on = true;
           strlcpy(state.active_script_id, request->script_id, sizeof(state.active_script_id));
           state.mode = luxio_Mode_ANIMATION;
           strlcpy(state.script_name, responseScript->name, sizeof(state.script_name));
@@ -708,14 +818,16 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!error.length()) { state.on = true; state.mode = luxio_Mode_ANIMATION; strlcpy(state.script_name, request->script->name, sizeof(state.script_name)); }
       else if (!animation) applyColor();
       break;
-    case luxio_Operation_STOP_SCRIPT: if (bool(request->script) && request->script->name[0] && strcmp(request->script->name, state.script_name)) break; if (state.mode == luxio_Mode_ANIMATION) { stopAnimation(); applyColor(); dirty = true; } break;
+    case luxio_Operation_STOP_SCRIPT: if (bool(request->script) && request->script->name[0] && strcmp(request->script->name, state.script_name)) break; if (state.mode == luxio_Mode_ANIMATION) { stopAnimation(); applyColor(); } break;
     case luxio_Operation_GET_PAIRING_CODE:
       if (state.matter_disabled) error = "Matter is unavailable on this device";
-      else if (WiFi.status() != WL_CONNECTED) error = "Connect to Wi-Fi before using Matter";
+      else if (!state.config.matter.enabled) error = "Matter is disabled";
+      else if (!state.config.wifi.enabled || WiFi.status() != WL_CONNECTED) error = "Connect to Wi-Fi before using Matter";
       else if (!pairingCode.length()) error = "Matter is not ready";
       else { strlcpy(response->pairing_code, pairingCode.c_str(), sizeof(response->pairing_code)); strlcpy(response->pairing_qr, pairingQr.c_str(), sizeof(response->pairing_qr)); }
       break;
     case luxio_Operation_CHECK_UPDATE:
+      if (!state.config.wifi.enabled || WiFi.status() != WL_CONNECTED) { error = "Connect to Wi-Fi before checking for updates"; break; }
       if (!updateChecking) { checkUpdate = true; updateChecking = true; availableBuild = 0; availableUpdate = {}; updateError = ""; }
       break;
     case luxio_Operation_INSTALL_UPDATE: {
@@ -728,21 +840,10 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       else if (esp_ota_get_partition_description(loader, &loaderDescription) != ESP_OK || strcmp(loaderDescription.project_name, "Recovery") || atoi(loaderDescription.version) < 31) error = "Signed recovery loader required; update via USB first";
       else {
         // Save the current controls before leaving the main application.
-        auto persistent = std::make_unique<luxio_State>(state);
-        persistent->animation_preview_count = 0; memset(persistent->animation_preview, 0, sizeof(persistent->animation_preview));
-        persistent->parameters_count = 0; memset(persistent->parameters, 0, sizeof(persistent->parameters));
-        if (!persistent->active_color_id[0]) persistent->color = {};
-        if (!persistent->active_gradient_id[0]) persistent->has_gradient = false;
-        if (!persistent->active_script_id[0]) persistent->script_name[0] = 0;
-        if (!persistent->active_gradient_id[0] && !persistent->active_script_id[0]) persistent->mode = luxio_Mode_COLOR;
-        size_t capacity = 0;
-        if (!pb_get_encoded_size(&capacity, luxio_State_fields, persistent.get())) { error = "Unable to encode device settings"; break; }
-        std::unique_ptr<uint8_t[]> stored(new (std::nothrow) uint8_t[capacity]);
-        if (!stored) { error = "Not enough memory to save device settings"; break; }
-        auto saved = pb_ostream_from_buffer(stored.get(), capacity);
-        if (!pb_encode(&saved, luxio_State_fields, persistent.get()) || prefs.putBytes("state", stored.get(), saved.bytes_written) != saved.bytes_written) error = "Unable to save device settings";
+        if (!saveUpdateState()) error = "Unable to save startup state";
         else if (prefs.putBytes("ota-job", &availableUpdate, sizeof(availableUpdate)) != sizeof(availableUpdate)) error = "Unable to save update request";
-        else if (esp_ota_set_boot_partition(loader) != ESP_OK) { prefs.remove("ota-job"); error = "Unable to select recovery loader"; }
+        else if (!prefs.putBool("resume-output", true)) { prefs.remove("ota-job"); error = "Unable to save update resume flag"; }
+        else if (esp_ota_set_boot_partition(loader) != ESP_OK) { prefs.remove("ota-job"); prefs.remove("resume-output"); error = "Unable to select recovery loader"; }
         else rebootPending = true;
       }
       break;
@@ -755,7 +856,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
   if (request->operation == luxio_Operation_GET_STATE || request->operation == luxio_Operation_SCAN_WIFI) {
     response->wifi_scanning = wifiScanning;
     response->wifi_networks_count = wifiNetworkCount;
-    response->wifi_networks = wifiNetworks; // Borrow the bounded scan cache under stateMutex.
+    response->wifi_networks = wifiNetworks.get(); // Borrow the bounded scan cache under stateMutex.
     strlcpy(response->wifi_scan_error, wifiScanError.c_str(), sizeof(response->wifi_scan_error));
   }
   if (request->operation == luxio_Operation_GET_STATE) {
@@ -876,10 +977,9 @@ static void cloudTask(void *) {
 #endif
   for (;;) {
     if (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
-    // Start once, only after Wi-Fi has an address. Serializing with HTTPS avoids
-    // overlapping Matter startup and TLS handshakes on the cloud worker.
+    // Start once, only when enabled and Wi-Fi has an address.
 #if LUXIO_MATTER
-    if (!matterStarted && !state.matter_disabled) {
+    if (!matterStarted && !state.matter_disabled && state.config.matter.enabled && state.config.wifi.enabled) {
       xSemaphoreTake(stateMutex, portMAX_DELAY);
       const bool on = state.on; const uint32_t brightness = state.brightness;
       xSemaphoreGive(stateMutex);
@@ -902,22 +1002,22 @@ static void cloudTask(void *) {
         xSemaphoreTake(stateMutex, portMAX_DELAY);
         uint32_t level = constrain((uint32_t(brightness) * 256 + 127) / 254, 1, 256);
         if (state.brightness != level) transition->begin(millis());
-        state.brightness = level; dirty = true; xSemaphoreGive(stateMutex); return true;
+        state.brightness = level; xSemaphoreGive(stateMutex); return true;
       });
       matterLight.onChangeOnOff([](bool on) {
-        xSemaphoreTake(stateMutex, portMAX_DELAY); transition->begin(millis()); state.on = on; dirty = true; xSemaphoreGive(stateMutex); return true;
+        xSemaphoreTake(stateMutex, portMAX_DELAY); transition->begin(millis()); state.on = on; xSemaphoreGive(stateMutex); return true;
       });
       matterLight.onChangeColorHSV([](espHsvColor_t hsv) {
         hsv.v = 255; auto rgb = espHsvColorToRgbColor(hsv);
-        xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true; state.color = {rgb.r, rgb.g, rgb.b, 0, 0, 0}; applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
+        xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true; state.color = {rgb.r, rgb.g, rgb.b, 0, 0, 0}; applyColor(); xSemaphoreGive(stateMutex); return true;
       });
       matterLight.onChangeColorTemperature([](uint16_t mired) {
         xSemaphoreTake(stateMutex, portMAX_DELAY); stopAnimation(); state.on = true;
         uint32_t warm = constrain((int(mired) - 153) * 255 / (500 - 153), 0, 255);
         if (!strcmp(state.config.strip_type, "WS2805")) state.color = {0, 0, 0, 0, warm, 255 - warm};
-        else if (!strcmp(state.config.strip_type, "WS2814")) state.color = {0, 0, 0, 255, 0, 0};
+        else if ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812"))) state.color = {0, 0, 0, 255, 0, 0};
         else state.color = {255, uint32_t(255 - warm * 90 / 255), uint32_t(255 - warm * 180 / 255), 0, 0, 0};
-        applyColor(); dirty = true; xSemaphoreGive(stateMutex); return true;
+        applyColor(); xSemaphoreGive(stateMutex); return true;
       });
       // Read the actual provider payload; unsupported setters cannot personalize it.
       chip::PayloadContents payload;
@@ -1035,20 +1135,69 @@ void setup() {
   stateMutex = xSemaphoreCreateMutex();
   if (!stateMutex) abort();
   prefs.begin("luxio", false);
-  state.build = LUXIO_BUILD; state.has_config = true; state.has_color = true;
+  if (!LittleFS.begin(true)) abort();
+  LittleFS.remove("/startup.pending");
+  state = {}; state.has_config = state.has_color = true;
   state.config = {"Luxio", "WS2805", 1, LUXIO_DEFAULT_GPIO, 0}; state.brightness = 16; state.on = true;
-  size_t savedSize = prefs.getBytesLength("state");
-  if (savedSize && savedSize < 4096) {
-    std::unique_ptr<uint8_t[]> saved(new uint8_t[savedSize]); prefs.getBytes("state", saved.get(), savedSize);
-    auto decoder = pb_istream_from_buffer(saved.get(), savedSize); pb_decode(&decoder, luxio_State_fields, &state);
-    if (state.build < 11) {
-      state.on = state.brightness > 0;
-      state.brightness = state.brightness ? (state.brightness * 256 + 127) / 255 : 16;
+  size_t configSize = prefs.getBytesLength("config");
+  if (configSize && configSize <= luxio_Config_size) {
+    uint8_t bytes[luxio_Config_size];
+    if (prefs.getBytes("config", bytes, configSize) == configSize) {
+      luxio_Config config = {}; auto decoder = pb_istream_from_buffer(bytes, configSize);
+      if (pb_decode(&decoder, luxio_Config_fields, &config) && config.led_count >= 1 && config.led_count <= 1024) state.config = config;
     }
-    state.brightness = constrain(state.brightness, 1, 256);
-    state.build = LUXIO_BUILD; state.active_script_id[0] = 0;
-    if (state.mode != luxio_Mode_GRADIENT || !state.has_gradient || !validGradient(state.gradient, state.config.strip_type)) { state.mode = luxio_Mode_COLOR; state.has_gradient = false; state.active_gradient_id[0] = 0; }
+  } else {
+    // Older releases stored hardware settings inside State; retain only settings.
+    size_t size = prefs.getBytesLength("state");
+    if (size && size < 4096) {
+      std::unique_ptr<uint8_t[]> bytes(new (std::nothrow) uint8_t[size]);
+      auto legacy = std::unique_ptr<luxio_State>(new (std::nothrow) luxio_State{});
+      if (bytes && legacy && prefs.getBytes("state", bytes.get(), size) == size) {
+        auto decoder = pb_istream_from_buffer(bytes.get(), size);
+        if (pb_decode(&decoder, luxio_State_fields, legacy.get()) && legacy->has_config && legacy->config.led_count >= 1 && legacy->config.led_count <= 1024) state.config = legacy->config;
+      }
+    }
   }
+  // Luxio cyan -> green. A single LED displays the first stop.
+  state.mode = luxio_Mode_GRADIENT; state.has_gradient = true; state.gradient.colors_count = 2;
+  state.gradient.colors[0] = {0, 210, 255, 0, 0, 0}; state.gradient.colors[1] = {79, 255, 127, 0, 0, 0};
+  state.color = state.gradient.colors[0];
+  const bool resumeOutput = prefs.getBool("resume-output", false);
+  auto releaseStartup = [](luxio_Response *saved) { if (saved) pb_release(luxio_Response_fields, saved); delete saved; };
+  std::unique_ptr<luxio_Response, decltype(releaseStartup)> startup(new (std::nothrow) luxio_Response{}, releaseStartup);
+  bool restored = false;
+  File savedFile = resumeOutput ? LittleFS.open("/startup.pb", "r") : File();
+  if (startup && savedFile && savedFile.size() > 8 && savedFile.size() <= 32776) {
+    uint8_t header[8] = {}; uint8_t bytes[64]; uint32_t crc = 0xffffffff;
+    bool valid = savedFile.read(header, 8) == 8 && !memcmp(header, "LXB1", 4);
+    size_t remaining = savedFile.size() - 8;
+    while (valid && remaining) {
+      size_t count = min(remaining, sizeof(bytes));
+      if (savedFile.read(bytes, count) != count) { valid = false; break; }
+      for (size_t i = 0; i < count; i++) {
+        crc ^= bytes[i];
+        for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
+      }
+      remaining -= count;
+    }
+    const uint32_t expected = uint32_t(header[4]) | uint32_t(header[5]) << 8 | uint32_t(header[6]) << 16 | uint32_t(header[7]) << 24;
+    if (valid && ~crc == expected && savedFile.seek(8)) {
+      pb_istream_t decoder = {}; decoder.state = &savedFile; decoder.bytes_left = savedFile.size() - 8;
+      decoder.callback = [](pb_istream_t *stream, pb_byte_t *bytes, size_t count) -> bool {
+        File *file = static_cast<File *>(stream->state);
+        return bytes ? file->read(bytes, count) == count : file->seek(file->position() + count);
+      };
+      if (pb_decode(&decoder, luxio_Response_fields, startup.get()) && startup->state && startup->state->has_config &&
+          startup->state->config.led_count >= 1 && startup->state->config.led_count <= 1024) {
+        state = *startup->state; restored = true;
+      }
+    }
+  }
+  savedFile.close();
+  if (!restored) startup.reset();
+  state.brightness = constrain(state.brightness, 1, 256); state.build = LUXIO_BUILD;
+  if (!state.config.has_wifi) { state.config.has_wifi = true; state.config.wifi.enabled = true; }
+  if (!state.config.has_matter) { state.config.has_matter = true; state.config.matter.enabled = true; }
   // Size all three frames for this strip rather than reserving 18 KiB for 1024 LEDs.
   frameCapacity = state.config.led_count;
 #if LUXIO_INTERNAL_RAM_RADIOS
@@ -1068,7 +1217,6 @@ void setup() {
   if (psramFound() && state.config.has_relay && (state.config.relay.gpio == 16 || state.config.relay.gpio == 17)) state.config.relay.enabled = false;
 #endif
   state.animation_preview_count = 0; memset(state.animation_preview, 0, sizeof(state.animation_preview));
-  state.parameters_count = 0; memset(state.parameters, 0, sizeof(state.parameters));
   mbedtls_pk_init(&identity);
   uint8_t keyBytes[256]; size_t keyLength = prefs.getBytesLength("identity");
   if (keyLength && keyLength <= sizeof(keyBytes)) {
@@ -1086,8 +1234,6 @@ void setup() {
   mbedtls_sha256(pub + sizeof(pub) - pubSize, pubSize, digest, 0);
   for (int i = 0; i < 32; i++) sprintf(state.device_id + i * 2, "%02x", digest[i]);
   mbedtls_base64_encode(base64, sizeof(base64), &base64Length, pub + sizeof(pub) - pubSize, pubSize); base64[base64Length] = 0; publicKey = reinterpret_cast<char *>(base64);
-  // A fresh filesystem is formatted only when it has no existing mountable content.
-  if (!LittleFS.begin(true)) abort();
   LittleFS.mkdir("/scripts");
   LittleFS.mkdir("/gradients"); LittleFS.mkdir("/colors"); LittleFS.remove("/colors/pending"); LittleFS.remove("/gradients/pending");
   LittleFS.remove("/scripts/pending"); // Discard an interrupted save; the original remains intact.
@@ -1118,16 +1264,32 @@ void setup() {
   ESP_ERROR_CHECK(rmt_new_tx_channel(&channel, &ledChannel));
   rmt_bytes_encoder_config_t encoding = {};
   encoding.bit0 = {.duration0 = 3, .level0 = 1, .duration1 = 9, .level1 = 0};
-  encoding.bit1 = {.duration0 = 8, .level0 = 1, .duration1 = 4, .level1 = 0};
+  encoding.bit1 = {.duration0 = uint16_t(!strcmp(state.config.strip_type, "SK6812") ? 6 : 8), .level0 = 1, .duration1 = uint16_t(!strcmp(state.config.strip_type, "SK6812") ? 6 : 4), .level1 = 0};
   encoding.flags.msb_first = 1;
   ESP_ERROR_CHECK(rmt_new_bytes_encoder(&encoding, &ledEncoder));
   ESP_ERROR_CHECK(rmt_enable(ledChannel));
 #endif
+  if (state.mode == luxio_Mode_ANIMATION && startup && startup->script && startup->script->source) {
+    startup->script->parameters_count = state.parameters_count;
+    memcpy(startup->script->parameters, state.parameters, sizeof(state.parameters));
+    String error = startAnimation(*startup->script);
+    if (!error.length()) {
+      state.mode = luxio_Mode_ANIMATION;
+      strlcpy(state.active_script_id, startup->script->id, sizeof(state.active_script_id));
+      strlcpy(state.script_name, startup->script->name, sizeof(state.script_name));
+    } else { strlcpy(animationError, error.c_str(), sizeof(animationError)); }
+  } else if (state.mode == luxio_Mode_ANIMATION) { stopAnimation(); }
+  startup.reset();
+  if (state.mode != luxio_Mode_ANIMATION) { state.parameters_count = 0; memset(state.parameters, 0, sizeof(state.parameters)); }
+  if (state.mode == luxio_Mode_GRADIENT && (!state.has_gradient || !validGradient(state.gradient, state.config.strip_type))) { state.mode = luxio_Mode_COLOR; state.has_gradient = false; }
   if (state.mode == luxio_Mode_GRADIENT) renderGradient(state.gradient, pixels, state.config.led_count);
-  else applyColor();
+  else if (state.mode != luxio_Mode_ANIMATION) applyColor();
   render();
   // The strip is externally powered: keep the radio awake for local controls
   // and Matter, and choose the strongest AP across all channels on each join.
+  if (state.config.wifi.enabled) {
+  wifiNetworks.reset(new (std::nothrow) luxio_WifiNetwork[32]{});
+  if (!wifiNetworks) abort();
   WiFi.setSleep(false);
   WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
@@ -1148,14 +1310,17 @@ void setup() {
   httpd_uri_t api = {}; api.uri = "/api"; api.method = HTTP_POST; api.handler = httpHandler; httpd_register_uri_handler(httpServer, &api);
   api.method = HTTP_OPTIONS; httpd_register_uri_handler(httpServer, &api);
   httpd_uri_t websocket = {}; websocket.uri = "/api/ws"; websocket.method = HTTP_GET; websocket.handler = websocketHandler; websocket.is_websocket = true; httpd_register_uri_handler(httpServer, &websocket);
-  startBluetooth();
   xTaskCreate(cloudTask, "luxio-cloud", LUXIO_INTERNAL_RAM_RADIOS ? 8192 : 12288, nullptr, 1, nullptr);
+  }
+  startBluetooth();
   // Reaching initialized local controls acknowledges the completed request.
   // An offline device must not roll back merely because Matter is waiting for Wi-Fi.
   // No timer, boot path or Matter callback checks for or starts a new update.
   esp_ota_mark_app_valid_cancel_rollback();
   if (prefs.getUInt("ota-floor", 0) < LUXIO_BUILD) prefs.putUInt("ota-floor", LUXIO_BUILD);
   prefs.remove("ota-job");
+  if (resumeOutput) prefs.remove("resume-output");
+  LittleFS.remove("/startup.pb");
 }
 
 void loop() {
@@ -1208,34 +1373,58 @@ void loop() {
       received = 0; expected = 0; header = 0;
     }
   }
-  if (millis() - lastFrame >= 33) {
-    lastFrame = millis(); xSemaphoreTake(stateMutex, portMAX_DELAY);
-    if (animation) {
-      luaInstructions = 100000;
-      taskYIELD(); TaskStatus_t current;
-      vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
-      // Larger strips need more pixel work; retain a bounded CPU budget.
-      luaDeadline = uint32_t(current.ulRunTimeCounter) + max(uint32_t(20000), state.config.led_count * 80u); lua_getglobal(animation, "loop");
-      if (lua_pcall(animation, 0, 0, 0) != LUA_OK) {
-        const char *error = lua_tostring(animation, -1);
-        strlcpy(animationError, error ? error : "Animation failed without an error message", sizeof(animationError));
+  xSemaphoreTake(stateMutex, portMAX_DELAY);
+  // ANIMATION_STEP_BEGIN
+  if (animation && (animationPending || animationPhase < 2 || uint32_t(millis() - animationFrameAt) >= 33)) {
+    if (!animationPending) {
+      lua_settop(animationThread, 0);
+      lua_getglobal(animationThread, animationPhase == 1 ? "setup" : "loop");
+      if (animationPhase == 1 && lua_isnil(animationThread, -1)) {
+        lua_pop(animationThread, 1); animationPhase = 2;
+        lua_getglobal(animationThread, "loop");
+      }
+      if (!lua_isfunction(animationThread, -1)) {
+        strlcpy(animationError, animationPhase == 1 ? "setup must be a function" : "Define a loop() function", sizeof(animationError));
         stopAnimation(); applyColor();
+      } else {
+        luaInstructions = 1000000; luaCpuRemaining = 500000; luaBudgetError = nullptr;
+        animationPending = true; animationFrameAt = millis();
       }
     }
-    render();
-    if (dirty && millis() - lastSave >= 1000) {
-      auto persistent = std::make_unique<luxio_State>(state);
-      persistent->animation_preview_count = 0; memset(persistent->animation_preview, 0, sizeof(persistent->animation_preview));
-      persistent->parameters_count = 0; memset(persistent->parameters, 0, sizeof(persistent->parameters));
-      if (!persistent->active_color_id[0]) persistent->color = {};
-      if (!persistent->active_gradient_id[0]) persistent->has_gradient = false;
-      if (!persistent->active_script_id[0]) persistent->script_name[0] = 0;
-      if (!persistent->active_gradient_id[0] && !persistent->active_script_id[0]) persistent->mode = luxio_Mode_COLOR;
-      std::unique_ptr<uint8_t[]> saved(new (std::nothrow) uint8_t[luxio_State_size]);
-      auto encoder = pb_ostream_from_buffer(saved.get(), saved ? luxio_State_size : 0);
-      if (saved && pb_encode(&encoder, luxio_State_fields, persistent.get())) prefs.putBytes("state", saved.get(), encoder.bytes_written);
-      lastSave = millis(); dirty = false;
+    if (animation) {
+      taskYIELD(); TaskStatus_t before;
+      vTaskGetInfo(nullptr, &before, pdFALSE, eInvalid);
+      const uint32_t started = uint32_t(before.ulRunTimeCounter);
+      luaDeadline = started + luaCpuRemaining; luaSliceDeadline = started + 4000;
+      int results = 0;
+      const int status = lua_resume(animationThread, nullptr, 0, &results);
+      taskYIELD(); TaskStatus_t after;
+      vTaskGetInfo(nullptr, &after, pdFALSE, eInvalid);
+      const uint32_t spent = uint32_t(after.ulRunTimeCounter) - started;
+      if (spent >= luaCpuRemaining) luaBudgetError = "Animation exceeded its CPU limit (500 ms per call)";
+      else luaCpuRemaining -= spent;
+      if (luaBudgetError || (status != LUA_OK && status != LUA_YIELD)) {
+        const char *error = luaBudgetError ? luaBudgetError : lua_tostring(animationThread, -1);
+        strlcpy(animationError, error ? error : "Animation failed without an error message", sizeof(animationError));
+        stopAnimation(); applyColor();
+      } else if (status == LUA_OK) {
+        lua_settop(animationThread, 0); animationPending = false;
+        if (animationPhase < 2) animationPhase++;
+        else { memcpy(pixels, animationPixels, state.config.led_count * 6); animationFrameReady = true; } // Publish only a complete frame.
+      }
     }
+  }
+  // ANIMATION_STEP_END
+  xSemaphoreGive(stateMutex);
+  if (millis() - lastFrame >= 33) {
+    lastFrame = millis(); xSemaphoreTake(stateMutex, portMAX_DELAY);
+    // A long strip can take >50 ms to transmit. Do not resend an unchanged
+    // frame between every Lua slice; still service fades, power and Identify.
+    // ANIMATION_OUTPUT_BEGIN
+    if (!animation || animationFrameReady || transition->active || identifyActive || transition->identifying) {
+      render(); animationFrameReady = false;
+    }
+    // ANIMATION_OUTPUT_END
     if (wifiScanning) {
       // Never wait for the radio under the state lock or pause the LED render loop.
       int count;
@@ -1281,7 +1470,7 @@ void loop() {
       }
     }
     if (wifiPending && !wifiScanning) { wifiPending = false; WiFi.disconnect(); WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str()); }
-    bool restart = rebootPending;
+    bool restart = rebootPending || (radioRestartAt && int32_t(millis() - radioRestartAt) >= 0);
     xSemaphoreGive(stateMutex);
     if (restart) { delay(200); ESP.restart(); }
   }
@@ -1290,7 +1479,7 @@ void loop() {
   if (millis() - lastBroadcast >= 250) {
     lastBroadcast = millis();
     size_t count = 8; int clients[8]; bool subscribed = false;
-    if (httpd_get_client_list(httpServer, &count, clients) == ESP_OK)
+    if (httpServer && httpd_get_client_list(httpServer, &count, clients) == ESP_OK)
       for (size_t i = 0; i < count; i++) if (httpd_ws_get_fd_info(httpServer, clients[i]) == HTTPD_WS_CLIENT_WEBSOCKET) subscribed = true;
     if (!subscribed) { delay(1); return; }
     auto *event = new (std::nothrow) luxio_Response{};
@@ -1313,7 +1502,7 @@ void loop() {
             std::unique_ptr<httpd_ws_frame_t> frame(static_cast<httpd_ws_frame_t *>(argument));
             std::unique_ptr<uint8_t[]> payload(frame->payload);
             size_t count = 8; int clients[8];
-            if (httpd_get_client_list(httpServer, &count, clients) == ESP_OK)
+            if (httpServer && httpd_get_client_list(httpServer, &count, clients) == ESP_OK)
               for (size_t i = 0; i < count; i++) if (httpd_ws_get_fd_info(httpServer, clients[i]) == HTTPD_WS_CLIENT_WEBSOCKET) httpd_ws_send_frame_async(httpServer, clients[i], frame.get());
           }, packet);
           if (queued == ESP_OK) memcpy(previousDigest, digest, 32);

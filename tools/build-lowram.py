@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Build the opt-in original ESP32 profile with a source-built IDF/Matter SDK.
+"""Build the original ESP32 release profile with a source-built IDF/Matter SDK.
 
-Does not flash or publish. The ordinary five-chip release build is unchanged.
+Does not flash or publish. Used by the five-chip release builder for the original ESP32.
 Requires Docker and the pinned Arduino core installed by bootstrap-firmware.sh.
 """
 import argparse
@@ -16,7 +16,7 @@ parser.add_argument('--directory', default='.sdk/lowram/esp32')
 args = parser.parse_args()
 assert 0 < args.build <= 2147483647
 directory = (root / args.directory).resolve()
-assert directory != root / '.sdk' and directory.is_relative_to(root / '.sdk'), 'Keep experimental builds in .sdk'
+assert any(directory != base and directory.is_relative_to(base) for base in [root / '.sdk', root / 'build']), 'Keep generated builds below .sdk or build'
 arduino = root / '.sdk/arduino/packages/esp32/hardware/esp32/3.3.3'
 assert arduino.is_dir(), 'Run tools/bootstrap-firmware.sh first'
 directory.mkdir(parents=True, exist_ok=True)

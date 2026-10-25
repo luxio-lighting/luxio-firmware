@@ -22,7 +22,7 @@ export class Animation {
     }
     lua.lua_pushcfunction(L, () => { lua.lua_pushinteger(L, count); return 1; });
     lua.lua_setglobal(L, to_luastring('luxio_get_pixel_count'));
-    lua.lua_pushcfunction(L, () => { lua.lua_pushstring(L, to_luastring(stripType === 'WS2805' ? 'RGBCCT' : stripType === 'WS2814' ? 'RGBW' : 'RGB')); return 1; });
+    lua.lua_pushcfunction(L, () => { lua.lua_pushstring(L, to_luastring(stripType === 'WS2805' ? 'RGBCCT' : (stripType === 'WS2814' || stripType === 'SK6812') ? 'RGBW' : 'RGB')); return 1; });
     lua.lua_setglobal(L, to_luastring('luxio_get_color_type'));
     lua.lua_pushcfunction(L, () => { lua.lua_pushinteger(L, this.elapsed); return 1; });
     lua.lua_setglobal(L, to_luastring('luxio_millis'));
@@ -39,7 +39,7 @@ export class Animation {
       if (index < 0 || index >= count) return lauxlib.luaL_error(L, to_luastring('Pixel index out of range (zero-based)'));
       const values = [2, 3, 4, 5, 6, 7].map(position => lauxlib.luaL_optinteger(L, position, 0));
       if (values.some(value => value < 0 || value > 255)) return lauxlib.luaL_error(L, to_luastring('Channels must be integers from 0 to 255'));
-      if ((stripType === 'WS2812' && values.slice(3).some(Boolean)) || (stripType === 'WS2814' && values.slice(4).some(Boolean)) || (stripType === 'WS2805' && values[3]))
+      if ((stripType === 'WS2812' && values.slice(3).some(Boolean)) || ((stripType === 'WS2814' || stripType === 'SK6812') && values.slice(4).some(Boolean)) || (stripType === 'WS2805' && values[3]))
         return lauxlib.luaL_error(L, to_luastring('Channel unavailable on this strip type'));
       this.pixels[index] = { red: values[0], green: values[1], blue: values[2], white: values[3], warmWhite: values[4], coolWhite: values[5] };
       return 0;

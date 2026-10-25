@@ -496,3 +496,61 @@ application exactly. The first USB readback had a transport framing error;
 the OTA test was repeated successfully with readback retries. The board is
 left on the published build, with its original settings. This qualifies the
 C6 update path, not C5 hardware or physical 1,024-LED signal quality.
+
+
+## Unreleased build 34 — radio settings, SK6812 and update-only state
+
+All five targets compile and package inside their existing 4 MB layouts. The C6 was tested with 1024 SK6812 pixels configured, USB control, Wi-Fi/Matter off/on, and cold-boot output. With Matter fully initialized, free internal RAM was 143,752 bytes; Wi-Fi alone 177,668; Wi-Fi off (Matter waiting) 257,288. The user confirmed on 2026-10-25 that their physical SK6812 strip works.
+
+Normal boots show the Luxio gradient and retain hardware/radio settings. Only an explicit OTA saves lighting state, consumed once on the following application boot. CRC/readback, interrupted-write atomicity, 16 KiB animation source, parameter restoration and one-shot consumption pass host tests using the production code. The C6’s entire 256 KiB LittleFS partition was unchanged after repeated brightness/power changes. A complete signed build-34 OTA has not been performed or published.
+
+iOS radio-confirmation and SK6812 simulator UI tests pass; the signed app is installed on the paired iPhone (launch blocked while locked). Android builds and unit tests pass. Setup passes its existing 73 browser tests and an additional SK6812 selection/protocol test. Existing uncommitted mobile work was preserved.
+
+
+## Unreleased build 35 — cooperative animations (2026-10-25)
+
+The old CPU deadline stopped valid Christmas, Fireplace and Cyberpunk frames at
+256 LEDs. Source initialization, setup and frames now run on a retained Lua
+coroutine in approximately 4 ms CPU slices. Each call has separate hard limits
+of 500 ms CPU and one million instructions; the VM retains its 128 KiB allocation
+cap. A sticky failure terminates scripts even when they use `pcall`. Only completed
+frames are copied to output. Unchanged frames are not retransmitted between Lua
+slices, while power/brightness fades and Identify continue to render.
+
+The staging frame uses six bytes per LED (6 KiB at 1024), allocated only during
+animation playback. Syntax errors remain immediate request errors; runtime errors
+arrive through `GET_STATE.animation_error` and are now displayed by the iOS app.
+
+Validation:
+- Real production Lua code passes sanitizer tests for multi-slice source/setup/
+  frames, complete-frame publication, output scheduling, replacement while
+  suspended, independent CPU/instruction limits, memory exhaustion and clock wrap.
+- Firmware host regressions and TypeScript checks pass. The HTTP fixture test
+  required an unsandboxed localhost bind; the remaining storage suite then passed.
+- All five ordinary targets build and fit the existing 4 MB layouts. The original
+  ESP32 DMA/Matter/BLE profile also builds and passes stack checks (2,304,480 bytes).
+- On the GLEDOPTO without PSRAM, all ten iOS preset sources stay active with
+  **read-back-verified 256 and 1024 LED configurations**. Long custom setup/frames,
+  power changes, runtime errors, infinite source/setup/loop code including `pcall`,
+  and allocation-limit failures pass. Saved libraries and original settings are
+  restored. HTTP poll timings are in the local verified hardware log.
+- USB script upload and polling pass during a long custom animation at 1024 LEDs.
+  Matter initialization and pairing-data availability are verified. This test did
+  not repeat full Matter commissioning or encrypted BLE traffic qualification.
+- iOS refresh regression verifies that runtime errors survive polling and clear
+  when the firmware clears them. The signed app builds, installs and launches on
+  the user's iPhone.
+
+Only the GLEDOPTO application partition was flashed, after a full backup. Its
+final image is the DMA/Matter/BLE profile, SHA-256
+`222e9128cfbbc9d0b2385159c02c2fe7aa8407fbdfb3e97bb5ff7f31d6196acd`.
+The ordinary ESP32 build was tested first but was replaced because its no-PSRAM
+Matter gate does not match this controller's existing experimental profile.
+An early preset harness used the wrong configuration opcode; its reported
+1024-LED results are invalid. The corrected test asserts the applied count on
+every poll; only that rerun supports the 1024-LED preset result above.
+
+The physical strip has fewer LEDs than the maximum configured test count; this
+validates allocation, execution and transmission at 1024, not the appearance of a
+physical 1024-LED strip. The combined-radio peak-memory caveats in
+[the low-RAM profile record](lowram-esp32.md) still apply. Build 35 is not published.

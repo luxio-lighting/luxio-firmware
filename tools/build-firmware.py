@@ -33,7 +33,7 @@ for target in matrix:
     directory.mkdir(parents=True, exist_ok=True)
     # A failed rebuild must never leave an apparently current release behind.
     shutil.rmtree(directory / 'release', ignore_errors=True)
-    build = os.environ.get('LUXIO_BUILD', '32')
+    build = os.environ.get('LUXIO_BUILD', '35')
     assert build.isdigit() and 0 < int(build) <= 2147483647, 'Invalid LUXIO_BUILD'
     print(f'Building {chip} ({target["architecture"]}), build {build}', flush=True)
     try:
@@ -43,6 +43,14 @@ for target in matrix:
             shutil.rmtree(source, ignore_errors=True)
             shutil.copytree(root / sketch, source)
             (source / 'partitions.csv').write_text(f"# Name,Type,SubType,Offset,Size,Flags\nnvs,data,nvs,0x9000,0x5000,\notadata,data,ota,0xe000,0x2000,\nloader,app,factory,0x10000,{target['recoverySize']:#x},\napp0,app,ota_0,{target['applicationAddress']:#x},{target['applicationSize']:#x},\nspiffs,data,spiffs,{target['minimumFlashSize']-0x50000:#x},0x40000,\ncoredump,data,coredump,{target['minimumFlashSize']-0x10000:#x},0x10000,\n")
+            if sketch == 'Luxio' and chip == 'esp32' and matter == '1':
+                # Publish the same DMA/Matter/BLE profile qualified on the GLEDOPTO.
+                lowram = directory / 'sdk'
+                subprocess.run([sys.executable, 'tools/build-lowram.py', '--build', build, '--directory', str(lowram)], check=True)
+                (directory / folder).mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(lowram / 'build/Luxio.bin', directory / folder / 'Luxio.ino.bin')
+                shutil.copyfile(lowram / 'build/partition_table/partition-table.bin', directory / folder / 'Luxio.ino.partitions.bin')
+                continue
             if sketch == 'Luxio' and target.get('builder') == 'idf':
                 subprocess.run([sys.executable, 'tools/build-compact.py', target['id']], check=True)
                 continue
@@ -90,7 +98,10 @@ for target in matrix:
             subprocess.run(command + [str(source)], check=True)
             assert (directory / folder / f'{sketch}.ino.bin').stat().st_size <= capacity, f'{chip} {sketch} exceeds partition'
             (directory / folder / f'{sketch}.ino.merged.bin').unlink(missing_ok=True)
-        if target.get('builder') == 'idf':
+        if chip == 'esp32' and matter == '1':
+            # Keep the existing recovery bootloader, already tested with this app.
+            shutil.copyfile(directory / 'recovery/Recovery.ino.bootloader.bin', directory / 'main/Luxio.ino.bootloader.bin')
+        elif target.get('builder') == 'idf':
             # Both images use the source-built SDK bootloader and identical table.
             shutil.copyfile(directory / 'main/Luxio.ino.bootloader.bin', directory / 'recovery/Recovery.ino.bootloader.bin')
         else:

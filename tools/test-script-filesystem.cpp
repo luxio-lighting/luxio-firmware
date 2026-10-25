@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
       if (compressed) size = encodeStoredScript(script, bytes, sizeof(bytes));
       else { auto old = pb_ostream_from_buffer(bytes, sizeof(bytes)); assert(pb_encode(&old, luxio_Script_fields, &script)); size = old.bytes_written; }
       assert(size);
-      if (config.block_count * config.block_size - lfs_fs_size(&fs) * config.block_size < size + 8192) break;
+      if (config.block_count * config.block_size - lfs_fs_size(&fs) * config.block_size < size + 40960) break;
       char path[64]; snprintf(path, sizeof(path), "/scripts/%s.pb", script.id);
       lfs_file_t file{}; assert(!lfs_file_open(&fs, &file, "/scripts/pending", LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC));
       auto written = lfs_file_write(&fs, &file, bytes, size);
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
       if (written != int(size) || closed || lfs_rename(&fs, "/scripts/pending", path)) break;
       counts[compressed]++;
     }
-    printf("256 KiB LittleFS, 8 KiB save reserve: %d %s presets\n", counts[compressed], compressed ? "compressed" : "uncompressed");
+    printf("256 KiB LittleFS, 40 KiB save reserve: %d %s presets\n", counts[compressed], compressed ? "compressed" : "uncompressed");
     assert(counts[compressed] > 32);
     // Every saved item must still be readable at full capacity.
     for (int i = 0; i < counts[compressed]; ++i) {

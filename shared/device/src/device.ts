@@ -20,6 +20,8 @@ export class Device {
     }
     this.state.build = 22;
     this.state.deviceId = deviceId;
+    this.state.config.wifi ??= { enabled: true };
+    this.state.config.matter ??= { enabled: true };
     this.state.parameters = []; this.state.animationPreview = [];
     this.state.scriptName = ''; this.state.activeScriptId = '';
     this.state.activeColorId ||= ''; this.state.activeGradientId ||= '';
@@ -38,7 +40,7 @@ export class Device {
         case 1: {
           const color = colorSchema.parse(request.color);
           const type = this.state.config.stripType;
-          if ((type === 'WS2812' && (color.white || color.warmWhite || color.coolWhite)) || (type === 'WS2814' && (color.warmWhite || color.coolWhite)) || (type === 'WS2805' && color.white)) throw new Error('Channel unavailable on this strip type');
+          if ((type === 'WS2812' && (color.white || color.warmWhite || color.coolWhite)) || ((type === 'WS2814' || type === 'SK6812') && (color.warmWhite || color.coolWhite)) || (type === 'WS2805' && color.white)) throw new Error('Channel unavailable on this strip type');
           this.animation?.close(); this.animation = undefined; this.state.activeColorId = ''; this.state.scriptName = ''; this.state.activeScriptId = ''; this.state.activeGradientId = ''; this.state.gradient = undefined; this.state.mode = 0; this.state.color = color; this.state.on = true;
           break;
         }
@@ -46,6 +48,8 @@ export class Device {
         case 15: this.state.on = z.boolean().parse(request.on ?? false); break;
         case 3: {
           const config = configSchema.parse(request.config);
+          config.wifi ??= this.state.config.wifi; config.matter ??= this.state.config.matter;
+          config.relay ??= this.state.config.relay;
           if (config.stripType !== this.state.config.stripType || config.ledCount !== this.state.config.ledCount || config.gpio !== this.state.config.gpio) {
             this.animation?.close(); this.animation = undefined; this.state.activeColorId = ''; this.state.scriptName = ''; this.state.activeScriptId = ''; this.state.activeGradientId = ''; this.state.gradient = undefined; this.state.mode = 0; this.state.color = colorSchema.parse({});
           }
@@ -124,7 +128,7 @@ export class Device {
           const gradient = gradientSchema.parse({ ...input, ...(request.operation === 17 ? { id: randomUUID(), name: 'Preview' } : request.operation === 20 ? { id: randomUUID() } : {}) });
           if (Buffer.byteLength(gradient.name) > 63 || Buffer.byteLength(gradient.editorMetadata) > 2048) throw new Error('Gradient metadata exceeds byte limit');
           const type = this.state.config.stripType;
-          for (const c of gradient.colors) if ((type === 'WS2805' && c.white) || (type === 'WS2814' && (c.warmWhite || c.coolWhite)) || (type === 'WS2812' && (c.white || c.warmWhite || c.coolWhite))) throw new Error('Channel unavailable on this strip type');
+          for (const c of gradient.colors) if ((type === 'WS2805' && c.white) || ((type === 'WS2814' || type === 'SK6812') && (c.warmWhite || c.coolWhite)) || (type === 'WS2812' && (c.white || c.warmWhite || c.coolWhite))) throw new Error('Channel unavailable on this strip type');
           if (request.operation === 20) { this.gradients.push(gradient); return { id: request.id, gradient }; }
           if (request.operation === 21) {
             const index = this.gradients.findIndex(g => g.id === gradient.id);
@@ -162,7 +166,7 @@ export class Device {
           const saved = savedColorSchema.parse({ ...input, ...(request.operation === 27 ? { id: randomUUID() } : {}) });
           if (Buffer.byteLength(saved.name) > 63) throw new Error('Name exceeds byte limit');
           const c = saved.color, type = this.state.config.stripType;
-          if ((type === 'WS2805' && c.white) || (type === 'WS2814' && (c.warmWhite || c.coolWhite)) || (type === 'WS2812' && (c.white || c.warmWhite || c.coolWhite))) throw new Error('Channel unavailable on this strip type');
+          if ((type === 'WS2805' && c.white) || ((type === 'WS2814' || type === 'SK6812') && (c.warmWhite || c.coolWhite)) || (type === 'WS2812' && (c.white || c.warmWhite || c.coolWhite))) throw new Error('Channel unavailable on this strip type');
           if (request.operation === 27) { this.colors.push(saved); return { id: request.id, savedColor: saved }; }
           if (request.operation === 28) {
             const index = this.colors.findIndex(c => c.id === saved.id);

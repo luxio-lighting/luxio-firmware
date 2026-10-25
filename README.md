@@ -122,9 +122,33 @@ payload stays in internal RAM for ISR access; color/fade frames prefer PSRAM.
 Arduino remains for APIs where replacing the wrapper has no demonstrated RAM
 benefit. The precompiled TLS library configuration is unchanged.
 
-Lua execution uses the task's CPU runtime counter for its 30 ms startup and 20 ms
-frame budgets. Time preempted by other tasks does not consume that budget. The
-100,000-instruction and 128 KiB VM limits remain enforced.
+## Animation scheduling (build 35)
+
+Lua source initialization, `setup()` and `loop()` run as resumable coroutines.
+An instruction hook yields after approximately 4 ms of task CPU time, letting
+USB, network commands and LED output progress between slices. A frame that needs
+more time finishes at a lower frame rate instead of being stopped at the old
+20 ms deadline. Native Lua C functions cannot yield midway through a call.
+Time spent preempted by other tasks or waiting between slices is not charged.
+
+Each call still has independent hard limits of 500 ms of CPU time, 1,000,000
+instructions and a 128 KiB VM allocation cap. Exceeding a limit stops the script,
+including loops wrapped in `pcall`. Errors remain in `GET_STATE.animation_error`;
+the iOS Animation page displays them. Syntax errors reject the request immediately;
+source initialization, setup and frame errors arrive asynchronously in state polls.
+
+Only completed frames reach the LEDs. The working frame costs another six bytes
+per configured LED (6 KiB at 1024 LEDs), allocated only while an animation runs
+and freed when it stops. Scripts need no changes to use cooperative execution.
+`loop()` still returns once per completed frame; read `luxio_millis()` once at the
+start of a frame when every pixel should use the same animation timestamp.
+
+Run `python3 tools/test-animation-scheduler.py` for real-Lua sanitizer tests of
+slicing, atomic frame publication, replacement, limits, cleanup and counter wrap.
+For an opt-in device regression, run `DEVICE_ADDRESS=<ip> ANIMATION_PRESETS=<preset-json> node --import tsx tools/test-animation-runtime-device.ts`. The JSON can be produced
+by the iOS preset exporter; omitting it tests custom frames and errors only.
+The test temporarily changes LED count to 256 and 1024, then restores the active
+animation, settings, brightness and power. It leaves saved libraries unchanged.
 
 ## Power and brightness (build 11)
 
@@ -267,3 +291,15 @@ updates and polling HTTP/WebSocket controls:
 ```sh
 DEVICE_ADDRESS=192.0.2.10 EXPECTED_BUILD=32 node --import tsx tools/test-memory-device.ts
 ```
+
+Unreleased build 34 adds `Enable Wi-Fi` and `Enable Matter` settings (both default enabled), SK6812 RGBW support, and update-only lighting-state restoration. A radio setting change restarts the device to reclaim all associated SDK tasks/buffers. Wi-Fi credentials and Matter fabrics are retained; Matter additionally waits for a connected Wi-Fi network. Wi-Fi-off boots skip the HTTP server, cloud worker and scan cache.
+
+Hardware settings, radio preferences and Wi-Fi credentials remain persistent. Lighting controls do not write flash: normal boots (including a radio-setting restart) show the Luxio cyan-to-green gradient at brightness 16/256 with power on. Only an explicit firmware update saves the current color/gradient, brightness, power, animation source and parameters, including unsaved previews. The next boot restores that snapshot once, then clears it; animation playback starts again from its setup function. Snapshots are streamed, CRC-checked and atomically replaced in LittleFS. Re-saving identical settings does not rewrite NVS.
+
+## Release build 35
+
+The original ESP32 release now uses the source-built DMA/Matter/BLE profile from
+`idf/esp32`, through `tools/build-lowram.py`. The release builder preserves the
+existing Arduino recovery bootloader and verifies matching partition tables.
+S3/C3 and C5/C6 keep their existing builders. All packages retain 4 MB layouts.
+See [profile validation](docs/lowram-esp32.md) for measured peak-memory limits.

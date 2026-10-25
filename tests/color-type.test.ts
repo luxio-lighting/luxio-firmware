@@ -16,6 +16,7 @@ function loop()
 end`;
   for (const [strip, expected] of [
     ['WS2812', [255, 190, 105, 0, 0, 0]],
+    ['SK6812', [0, 0, 0, 255, 0, 0]],
     ['WS2814', [0, 0, 0, 255, 0, 0]],
     ['WS2805', [0, 0, 0, 0, 180, 75]],
   ] as const) for (const count of [1, 60, 1024]) {

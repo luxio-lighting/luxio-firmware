@@ -1,5 +1,7 @@
 # Original ESP32 RAM optimization — 2026-10-25
 
+Release update: build 35 promotes this profile to the original ESP32 release package, including the cooperative animation scheduler. The measurements below are historical qualification records; the peak-memory caveats still apply.
+
 The experimental SPI DMA output eliminated the wrong-color/white flashes reported with Rainbow on the physical strip. Matter and encrypted BLE remain enabled without PSRAM. The worst-case 1,024-LED simultaneous commissioning/update/control workload is **not yet reliable**: it can exhaust memory. This profile is local and unpublished; ordinary releases retain their Matter PSRAM gate and RMT output.
 
 Hardware: GLEDOPTO GL-C-016WL-D, ESP32-D0WD-V3 revision 3.1, 4 MiB flash, no PSRAM, GPIO16 data and GPIO18 non-inverted relay. The physical strip has 60 WS2805 LEDs. Configuring 1,024 exercises full buffer allocation, rendering and waveform transmission, but is not visual validation of a physical 1,024-LED strip.
@@ -21,7 +23,7 @@ DMA uses `20 * LED count + 240` bytes: four SPI bits per LED bit, up to five cha
 
 The three rendering frames, Matter metadata and transient cryptographic allocations use ESP-IDF's byte-accessible instruction RAM pool. Lua and DMA storage stay in ordinary DRAM. The SDK requires single-core mode for the IRAM byte-access handler; unaligned accesses incur exception overhead. Allocations grow when LED count increases and reclaim excess capacity on reboot.
 
-Script source strings allocate their actual length instead of reserving 16,385 bytes per structure. Animation startup transfers ownership of the decoded source, and Lua uses a short chunk name rather than retaining another source copy. Library initialization is protected, and the CPU budget scales with LED count while retaining the instruction limit. Responses borrow the bounded Wi-Fi scan cache under the state mutex instead of embedding another 32-network array. These changes preserve the wire format.
+Script source strings allocate their actual length instead of reserving 16,385 bytes per structure. Animation startup transfers ownership of the decoded source, and Lua uses a short chunk name rather than retaining another source copy. Library initialization is protected. Build 35 runs Lua source initialization, setup and frames in resumable CPU slices, with separate hard limits; see the animation scheduling section in the main README. Responses borrow the bounded Wi-Fi scan cache under the state mutex instead of embedding another 32-network array. These changes preserve the wire format.
 
 BLE now releases its receive slot before sending the reply, allowing one pending request while notifications are in flight. Previously it cleared `ready` after the final notification and a task delay: a client could already have received the complete reply and get an insufficient-resource error on its next request. The worker no longer clears a newer pending request during completion cleanup.
 
