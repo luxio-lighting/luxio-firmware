@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=32 tools/build-firmware.sh all
+LUXIO_BUILD=35 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=32 tools/build-firmware.sh esp32
+LUXIO_BUILD=35 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -29,12 +29,14 @@ Initial installation requires USB flashing of the bootloader, partition table, e
 
 The recovery web page is at the device's LAN IP while updating, with `/status`, `POST /retry` and `POST /update`. A replacement update requires `url` (HTTPS), `sha256`, `size`, `build`, and `target: "<chip>-recovery-v1"`. It validates the target, image size, chip, Luxio app descriptor/build, SHA-256 and ESP image checksum before boot selection. Failed transfers stay in recovery for manual retry. The bootloader's pending-image rollback returns to recovery if the new application resets before confirming startup; there is no previous full application to restore.
 
-Matter uses Wi-Fi/IP; on S3/C3/C5/C6, Luxio exclusively owns Bluetooth for discovery, setup and control. The original ESP32 uses USB/Wi-Fi controls because the combined BLE/Matter stack exhausts its RAM. Physical qualification of the combined build and Matter conformance remain pending. See [release status](docs/release-status.md).
+Matter uses Wi-Fi/IP; Luxio exclusively owns Bluetooth for discovery, setup and control on all five targets. From build 35, original ESP32 releases use the tested source-built DMA/Matter/BLE profile. Hardware qualification and remaining peak-memory limits are recorded in [release status](docs/release-status.md) and [the low-RAM profile](docs/lowram-esp32.md).
 
 
-## Matter memory policy (build 28)
+## Matter memory policy
 
-All public target binaries include Matter, but startup enables it only when usable
+All public target binaries include Matter. The source-built ESP32/C5/C6 profiles allow Matter without PSRAM; all profiles wait for Wi-Fi and respect the persistent Enable Matter setting. The precompiled S3/C3 profiles retain the build-28 memory gate described below.
+
+On those precompiled profiles, startup enables Matter only when usable
 PSRAM is detected with at least 2 MiB total and 1 MiB free after the LED frames are
 allocated. This is a conservative Luxio policy, not a universal Matter hardware
 minimum. It is based on detected memory, not the CPU architecture or chip family.
@@ -106,7 +108,9 @@ Project design notes and historical test records are retained in [docs/project](
 
 Build 13 stores colors, native gradients, and compressed Lua animations in separate directories within the existing 256 KiB filesystem. Client-supplied live content stays in RAM. There is no fixed item-count cap. See [native resources](docs/native-resources.md) for the API and [animation storage](docs/script-storage.md) for compatibility, pagination, capacity measurements and tests.
 
-## LED output memory (build 29)
+## LED output memory
+
+Original ESP32 releases from build 35 use DMA output; see [the profile record](docs/lowram-esp32.md) for its buffer accounting. The following build-29 RMT accounting applies to the other targets.
 
 LED output uses ESP-IDF's RMT byte encoder directly instead of Arduino's expanded
 symbol buffer. The ISR reads a small internal-RAM payload of at most five bytes
@@ -184,11 +188,11 @@ Preset catalogs belong to the mobile apps and Studio. Firmware accepts client-su
 
 ## Lua color capabilities (build 22)
 
-`luxio_get_color_type()` returns `"RGB"`, `"RGBW"`, or `"RGBCCT"` from the configured strip type (WS2812, WS2814, or WS2805 respectively). It is available at the top level, in `setup()`, and in `loop()`. It reports configured channels; it does not detect the attached hardware. Older firmware can use `luxio_get_color_type and luxio_get_color_type() or "RGB"` to fall back to RGB output.
+`luxio_get_color_type()` returns `"RGB"`, `"RGBW"`, or `"RGBCCT"` from the configured strip type (WS2812, WS2814/SK6812, or WS2805 respectively). It is available at the top level, in `setup()`, and in `loop()`. It reports configured channels; it does not detect the attached hardware. Older firmware can use `luxio_get_color_type and luxio_get_color_type() or "RGB"` to fall back to RGB output.
 
 ## Luxio Bluetooth with Matter over Wi-Fi
 
-The S3/C3/C5/C6 firmware exposes the Luxio service
+All five release targets expose the Luxio service
 `e97b1000-3c27-4a20-9df4-7d025bc7e451`, including before Wi-Fi is configured.
 RX `1001` accepts writes with response and requires encryption; TX `1002` sends
 notifications. Subscribe first, then send an LXP1-framed Protobuf request in
@@ -204,9 +208,9 @@ connect the light to Wi-Fi before adding it to a Matter controller. No Matter
 BLE service is advertised. Existing fabrics and Wi-Fi credentials are preserved.
 
 The pinned Arduino 3.3.3 SDK provides NimBLE on S3/C3/C5/C6. Original ESP32
-already has CHIPoBLE disabled. Its public build keeps Luxio BLE disabled even when Matter is skipped at runtime:
-the combined stack exhausted RAM on the tested no-PSRAM controller. USB and Wi-Fi
-controls remain available. Diagnostic builds with `LUXIO_MATTER=0` use
+releases from build 35 use the source-built network-only Matter profile with
+Luxio BLE enabled. Earlier stock builds disabled BLE because of RAM exhaustion.
+Diagnostic Arduino builds with `LUXIO_MATTER=0` use
 `bluetooth_esp32.cpp` and NimBLE-Arduino 2.5.1, installed by
 `tools/bootstrap-firmware.sh`, with one peripheral connection. The explicit
 Arduino BT link anchor prevents controller RAM being released before NimBLE
@@ -292,7 +296,7 @@ updates and polling HTTP/WebSocket controls:
 DEVICE_ADDRESS=192.0.2.10 EXPECTED_BUILD=32 node --import tsx tools/test-memory-device.ts
 ```
 
-Unreleased build 34 adds `Enable Wi-Fi` and `Enable Matter` settings (both default enabled), SK6812 RGBW support, and update-only lighting-state restoration. A radio setting change restarts the device to reclaim all associated SDK tasks/buffers. Wi-Fi credentials and Matter fabrics are retained; Matter additionally waits for a connected Wi-Fi network. Wi-Fi-off boots skip the HTTP server, cloud worker and scan cache.
+Build 35 includes the build-34 additions: `Enable Wi-Fi` and `Enable Matter` settings (both default enabled), SK6812 RGBW support, and update-only lighting-state restoration. A radio setting change restarts the device to reclaim all associated SDK tasks/buffers. Wi-Fi credentials and Matter fabrics are retained; Matter additionally waits for a connected Wi-Fi network. Wi-Fi-off boots skip the HTTP server, cloud worker and scan cache.
 
 Hardware settings, radio preferences and Wi-Fi credentials remain persistent. Lighting controls do not write flash: normal boots (including a radio-setting restart) show the Luxio cyan-to-green gradient at brightness 16/256 with power on. Only an explicit firmware update saves the current color/gradient, brightness, power, animation source and parameters, including unsaved previews. The next boot restores that snapshot once, then clears it; animation playback starts again from its setup function. Snapshots are streamed, CRC-checked and atomically replaced in LittleFS. Re-saving identical settings does not rewrite NVS.
 
