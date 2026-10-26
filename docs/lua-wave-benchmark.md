@@ -98,8 +98,9 @@ allocations; they are not exact incremental RAM costs.
 - Both mobile C runtimes and all four JavaScript runtime copies run the same
   bulk fixtures at 1, 6 and 1024 pixels across all four strip types.
 - Shipped presets are checked against the optimized paths in the frozen benchmark fixture. The
-  Swift, Kotlin, Studio and benchmark catalogs contain the same Lua sources.
-- Studio's 27 browser tests cover playback, docs, and preservation of customized
+  Swift, Kotlin and Studio production catalogs contain identical Lua sources; the
+  frozen benchmark fixture retains both paths for comparison.
+- Studio's 26 browser tests cover playback, docs, and preservation of customized
   workspace sources; Android builds and TypeScript checks pass.
 - The full firmware passes all ten presets and ten bulk API fixtures on the
   GLEDOPTO at 100 and 1024 configured WS2805 pixels, with its normal radios

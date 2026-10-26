@@ -582,3 +582,42 @@ match the built distributions. iOS and Android changes are committed and pushed;
 iOS 0.1.51 (52) is installed on the paired iPhone. CLI 3.0.0 source is committed
 and pushed, but npm publication was skipped at the user's request. The API
 required no code changes for this release.
+
+
+## Public build 36 — float Lua and bulk rendering (2026-10-26)
+
+[Workflow 40412159459](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40412159459)
+built and published source commit `9b465377501ee4a7ea87beed8018bbff823ec579`
+on public channel 0 for all five chips. Lua uses float arithmetic, and the new
+fill/HSV/wave APIs reduce per-pixel Lua work. Wave rendering yields cooperatively
+in bounded chunks to keep control requests responsive. See the
+[paired ESP32 benchmarks](lua-wave-benchmark.md) for performance, memory and
+hardware-test limits.
+
+The current iOS, Android and Studio presets require the new animation API
+directly. There are no older-firmware fallback branches or new migration paths.
+Historical implementations are retained only as benchmark/test fixtures.
+
+Independent production verification checked all five public ECDSA signatures,
+all 25 part sizes and SHA-256 hashes, bootloader/recovery/application chip IDs,
+build descriptors, 4 MB image headers and partition boundaries. HTTP manifest
+queries and application downloads completed without redirects and matched HTTPS.
+
+| Chip | Application bytes | Recovery bytes | Application SHA-256 |
+| --- | ---: | ---: | --- |
+| esp32 | 2,298,800 | 1,029,568 | `0d9d3e342430f4ba3d3715ec4b02064d9d4c20adb4a1274e25d6a3342506a8c8` |
+| esp32s3 | 2,236,256 | 1,014,720 | `3645b2c602da6cae10e61dab0e5a0f29ef2037ae48de659f35f3333e65614a16` |
+| esp32c3 | 2,282,064 | 1,085,040 | `8ebc887160aea40a4f9638d8194770d86ab1d6ca8071fe8cbd2124c205d96694` |
+| esp32c5 | 2,489,472 | 1,143,696 | `151f98b114202239ccafdc0b2b3b996a2dc2ba1b469f46fac3dbf0af89860eea` |
+| esp32c6 | 2,422,000 | 1,091,072 | `4974e1a3b74b4b9f3cfeabd3d183141c1f6fe339755dec0c84479effaa534dbf` |
+
+Firmware host tests, iOS host/native tests and three targeted iOS simulator UI
+tests passed. Android debug compilation and native sanitizer tests passed. CLI
+tests, checks and build passed. Studio checks, build, bulk fixtures and 26 browser
+tests passed. The live Studio documentation and JavaScript bundle match its
+successful deployment of `acbbafb`.
+
+Related pushed commits: iOS `5c3a248` (including the pending action-error toasts),
+Android `ccd00b2`, CLI `d22990f`, and Studio `acbbafb`. No API or Setup code changes
+were required. npm publication remains skipped. This publication verification
+did not flash devices or repeat the physical testing documented in the benchmark.
