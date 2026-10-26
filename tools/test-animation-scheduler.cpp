@@ -10,10 +10,19 @@ extern "C" {
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>
+#include <math.h>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 using String = std::string;
+static_assert(sizeof(lua_Number) == 4, "Firmware Lua must use single-precision floats");
+static_assert(sizeof(lua_Integer) == sizeof(long), "Preserve the firmware's C89 integer configuration");
+#define STRING_MATH_IMPL(x) #x
+#define STRING_MATH(x) STRING_MATH_IMPL(x)
+static_assert(std::string_view(STRING_MATH(l_mathop(sin))) == "sinf", "Float Lua must use float math even with LUA_USE_C89");
+#undef STRING_MATH
+#undef STRING_MATH_IMPL
 static luxio_State state;
 static uint32_t wallTime, cpuTime, cpuStep = 500;
 static uint32_t millis() { return wallTime; }
@@ -47,6 +56,7 @@ static void step() {
 static void output() {
 // PRODUCTION_OUTPUT
 }
+// BULK_CASES
 int main() {
  for(size_t count: {1,256,1024}) {
   state={}; state.config.led_count=count; strcpy(state.config.strip_type,"WS2812"); state.color.red=7;
@@ -94,6 +104,25 @@ int main() {
    assert(!animationPixels && luaMemory==0);
   }
   cpuStep=500;
+  // A yielded native render must finish its pixels and continue Lua exactly
+  // once, without publishing its partial working buffer.
+  memset(pixels,0,count*6); cpuStep=1000;
+  luxio_Script chunks{}; chunks.source=strdup("local calls=0 function loop() luxio_render_waves({{offset=1}},{{{wave=1,gain=100}}}) calls=calls+1 luxio_set_pixel_color(luxio_get_pixel_count()-1,17,calls,0) end");
+  assert(startAnimation(chunks).empty());
+  unsigned chunkTurns=0;
+  while(!animationFrameReady){wallTime+=34;step();assert(animation);++chunkTurns;if(!animationFrameReady)for(size_t i=0;i<count;i++)assert(pixels[i][0]==0);}
+  assert(pixels[count-1][0]==17 && pixels[count-1][1]==1);
+  if(count==1024)assert(chunkTurns>1);
+  stopAnimation();cpuStep=500;
+  // Native rendering must yield and enforce the hard deadline between calls,
+  // including through pcall, rather than waiting for 1,000 Lua instructions.
+  cpuStep=5000;
+  luxio_Script bulkLoop{};bulkLoop.source=strdup("local w={{offset=1}} local c={{{wave=1}}} function loop() while true do pcall(luxio_render_waves,w,c) end end");
+  assert(startAnimation(bulkLoop).empty());
+  unsigned bulkTurns=0;
+  while(animation){wallTime+=34;step();assert(++bulkTurns<500);}
+  assert(bulkTurns>1 && strstr(animationError,"CPU limit") && luaMemory==0);
+  cpuStep=500;
   // Real allocator cap, including source/setup execution, remains enforced.
   luxio_Script memory{};memory.source=strdup("function loop() local x=string.rep('a',200000) end");
   assert(startAnimation(memory).empty());for(int i=0;i<5 && animation;i++){wallTime+=34;step();}
@@ -105,5 +134,29 @@ int main() {
  luxio_Script wrap{};wrap.source=strdup("function loop() for i=1,3000 do local x=i*i end luxio_set_pixel_color(0,99,0,0) end");assert(startAnimation(wrap).empty());
  for(int i=0;i<30 && pixels[0][0]!=99;i++){wallTime+=5;step();assert(animation);}
  assert(pixels[0][0]==99);stopAnimation();free(pixels);
+ for(const char *strip: {"WS2812", "WS2814", "WS2805", "SK6812"}) for(unsigned count: {1u, 6u, 1024u}) {
+  state={};state.config.led_count=count;strcpy(state.config.strip_type,strip);
+  frameCapacity=count;pixels=static_cast<uint8_t (*)[6]>(calloc(count,6));
+  for(unsigned test=0;test<sizeof(bulkCases)/sizeof(*bulkCases);test++) {
+   luxio_Script script{};script.source=strdup(bulkCases[test]);assert(startAnimation(script).empty());
+   while(!animationFrameReady){wallTime+=34;step();assert(animation && !animationError[0]);}
+   for(unsigned i=0;i<count;i++) {
+    uint8_t expected[6]={0};
+    if(test==0){expected[0]=i==count-1?44:11;expected[1]=i==count-1?55:22;expected[2]=i==count-1?66:33;}
+    if(test==1){const uint8_t colors[6][3]={{255,0,0},{255,255,0},{0,255,0},{0,255,255},{0,0,255},{255,0,255}};memcpy(expected,colors[i%6],3);}
+    if(test==2)expected[0]=expected[1]=expected[2]=127;
+    if(test==3||test==8){if(!strcmp(strip,"WS2805")){expected[4]=180;expected[5]=75;}else if(strcmp(strip,"WS2812"))expected[3]=255;else {expected[0]=255;expected[1]=190;expected[2]=105;}}
+    if(test==4){const uint8_t colors[6][3]={{0,0,255},{0,255,255},{0,255,0},{255,255,0},{255,0,0},{255,0,255}};memcpy(expected,colors[i%6],3);}
+    if(test==5)expected[0]=255;
+    if(test==6){expected[0]=127;expected[1]=31;}
+    if(test==7){double v=0.5+0.25*sin(0.3-i*0.2)+0.1*sin(-0.7+i*0.4);expected[0]=(uint8_t)(255*v);expected[1]=(uint8_t)(100*pow(v,8));}
+    if(test==9){expected[0]=11;expected[1]=22;expected[2]=33;}
+    for(int c=0;c<6;c++)assert(abs(int(pixels[i][c])-expected[c]) <= (test==1||test==4||test==7?1:0));
+   }
+   stopAnimation();assert(luaMemory==0);
+  }
+  free(pixels);
+ }
+ puts("PASS: bulk fill/range/HSV/waves, bounds, rejected writes, white channels and 1/6/1024 pixels");
  puts("PASS: cooperative startup/frames, atomic output, replacement, CPU/instruction/memory limits and clock wrap");
 }

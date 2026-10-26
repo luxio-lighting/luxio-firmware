@@ -114,9 +114,11 @@
 #define LUA_FLOAT_LONGDOUBLE	3
 
 
-/* Default configuration ('long long' and 'double', for 64-bit Lua) */
+/* Luxio uses single-precision arithmetic to match ESP32/S3 hardware FPUs.
+** Keep integer configuration unchanged, including the LUA_USE_C89 build path.
+*/
 #define LUA_INT_DEFAULT		LUA_INT_LONGLONG
-#define LUA_FLOAT_DEFAULT	LUA_FLOAT_DOUBLE
+#define LUA_FLOAT_DEFAULT	LUA_FLOAT_FLOAT
 
 
 /*
@@ -150,10 +152,10 @@
 
 #elif LUA_C89_NUMBERS	/* }{ */
 /*
-** largest types available for C89 ('long' and 'double')
+** Keep C89's 'long' integers, with Luxio's selected float precision.
 */
 #define LUA_INT_TYPE	LUA_INT_LONG
-#define LUA_FLOAT_TYPE	LUA_FLOAT_DOUBLE
+#define LUA_FLOAT_TYPE	LUA_FLOAT_DEFAULT
 
 #else		/* }{ */
 /* use defaults */
@@ -636,7 +638,11 @@
 ** availability of these variants. ('math.h' is already included in
 ** all files that use these macros.)
 */
-#if defined(LUA_USE_C89) || (defined(HUGE_VAL) && !defined(HUGE_VALF))
+/* Luxio's toolchains provide C99 float math even with LUA_USE_C89 enabled
+** for the rest of Lua. Do not silently promote sin/pow/etc. back to double.
+*/
+#if (defined(LUA_USE_C89) && LUA_FLOAT_TYPE != LUA_FLOAT_FLOAT) || \
+    (defined(HUGE_VAL) && !defined(HUGE_VALF))
 #undef l_mathop  /* variants not available */
 #undef lua_str2number
 #define l_mathop(op)		(lua_Number)op  /* no variant */

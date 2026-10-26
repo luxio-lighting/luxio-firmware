@@ -17,6 +17,7 @@
 #include "control_error.h"
 #include "control_response.h"
 #include <memory>
+#include <math.h>
 #include <atomic>
 #include <esp_heap_caps.h>
 #include <esp_http_server.h>
@@ -41,7 +42,7 @@ extern "C" {
 #include "vendor/lua/lualib.h"
 }
 #ifndef LUXIO_BUILD
-#define LUXIO_BUILD 1
+#define LUXIO_BUILD 36
 #endif
 #ifndef LUXIO_CLOUD_URL
 #define LUXIO_CLOUD_URL "http://api.luxio.lighting"
@@ -199,21 +200,128 @@ static void *luaAllocator(void *, void *ptr, size_t oldSize, size_t newSize) {
   if (result) luaMemory = luaMemory - oldSize + newSize;
   return result;
 }
-static void luaHook(lua_State *L, lua_Debug *) {
-  luaInstructions -= 1000;
+static void luaHook(lua_State *L, lua_Debug *debug) {
+  if (debug) luaInstructions -= 1000;
   if (luaInstructions <= 0) luaBudgetError = "Animation exceeded its instruction limit (1,000,000 per call)";
   // Checkpoint this task's CPU time, excluding time spent preempted by radios.
   taskYIELD(); TaskStatus_t current;
   vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
   const uint32_t now = uint32_t(current.ulRunTimeCounter);
   if (int32_t(now - luaDeadline) >= 0) luaBudgetError = "Animation exceeded its CPU limit (500 ms per call)";
-  // Yield from the hook, not an error that a script could swallow with pcall.
+  // Yield instead of raising an error that a script could swallow with pcall.
   // The owner checks hard limits after resume and can destroy the entire VM.
   if (lua_isyieldable(L) && (luaBudgetError || int32_t(now - luaSliceDeadline) >= 0)) {
     lua_yield(L, 0);
     return;
   }
   if (luaBudgetError) luaL_error(L, "%s", luaBudgetError);
+}
+static int luaRenderWaves(lua_State *L, int, lua_KContext start) {
+  // Small, bounded descriptors on the stack; pixel storage is never duplicated.
+  struct WaveTerm { lua_Number phase, step, amplitude; };
+  struct Wave { lua_Number offset; int count, positive; struct WaveTerm terms[4]; } waves[4] = {0};
+  struct MixTerm { lua_Number gain; int wave, power; };
+  struct Channel { lua_Number offset; int count, multiply; struct MixTerm terms[4]; } channels[6] = {0};
+  luaL_checktype(L, 1, LUA_TTABLE); luaL_checktype(L, 2, LUA_TTABLE);
+  size_t waveCount = lua_rawlen(L, 1);
+  if (waveCount < 1 || waveCount > 4) return luaL_error(L, "Use 1-4 waves");
+  if (lua_rawlen(L, 2) > 6) return luaL_error(L, "Use at most six color channels");
+  for (size_t w = 0; w < waveCount; w++) {
+      lua_rawgeti(L, 1, w + 1); luaL_checktype(L, -1, LUA_TTABLE);
+      lua_getfield(L, -1, "offset"); waves[w].offset = luaL_optnumber(L, -1, 0); lua_pop(L, 1);
+      if (!isfinite(waves[w].offset) || waves[w].offset < -4 || waves[w].offset > 4)
+          return luaL_error(L, "Wave offset must be finite and between -4 and 4");
+      lua_getfield(L, -1, "positive");
+      if (!lua_isnil(L, -1) && !lua_isboolean(L, -1)) return luaL_error(L, "positive must be a boolean");
+      waves[w].positive = lua_toboolean(L, -1); lua_pop(L, 1);
+      size_t length = lua_rawlen(L, -1);
+      if (length > 4) return luaL_error(L, "Use at most four sine terms per wave");
+      waves[w].count = (int)length;
+      for (size_t t = 0; t < length; t++) {
+          lua_rawgeti(L, -1, t + 1); luaL_checktype(L, -1, LUA_TTABLE);
+          const char *keys[] = {"phase", "step", "amplitude"};
+          lua_Number values[3];
+          for (int k = 0; k < 3; k++) {
+              lua_getfield(L, -1, keys[k]); values[k] = luaL_optnumber(L, -1, k == 2 ? 1 : 0); lua_pop(L, 1);
+              lua_Number limit = k == 2 ? 4 : (lua_Number)1e12;
+              if (!isfinite(values[k]) || values[k] < -limit || values[k] > limit)
+                  return luaL_error(L, "Invalid sine phase, step or amplitude");
+          }
+          waves[w].terms[t].phase = values[0]; waves[w].terms[t].step = values[1]; waves[w].terms[t].amplitude = values[2];
+          lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+  }
+  for (int c = 0; c < 6; c++) {
+      lua_rawgeti(L, 2, c + 1);
+      if (lua_isnil(L, -1)) { lua_pop(L, 1); continue; }
+      luaL_checktype(L, -1, LUA_TTABLE);
+      lua_getfield(L, -1, "offset"); channels[c].offset = luaL_optnumber(L, -1, 0); lua_pop(L, 1);
+      if (!isfinite(channels[c].offset) || channels[c].offset < -1024 || channels[c].offset > 1024)
+          return luaL_error(L, "Channel offset must be finite and between -1024 and 1024");
+      lua_getfield(L, -1, "multiply"); lua_Integer multiply = luaL_optinteger(L, -1, 0); lua_pop(L, 1);
+      if (multiply < 0 || multiply > (lua_Integer)waveCount) return luaL_error(L, "Invalid modulation wave index");
+      channels[c].multiply = (int)multiply;
+      size_t length = lua_rawlen(L, -1);
+      if (length > 4) return luaL_error(L, "Use at most four terms per color channel");
+      channels[c].count = (int)length;
+      if (((!strcmp(state.config.strip_type, "WS2805") && c == 3) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && c >= 4) || (!strcmp(state.config.strip_type, "WS2812") && c >= 3)) && (length || channels[c].offset != 0))
+          return luaL_error(L, "Channel unavailable on this strip type");
+      for (size_t t = 0; t < length; t++) {
+          lua_rawgeti(L, -1, t + 1); luaL_checktype(L, -1, LUA_TTABLE);
+          lua_getfield(L, -1, "wave"); lua_Integer wave = luaL_checkinteger(L, -1); lua_pop(L, 1);
+          lua_getfield(L, -1, "power"); lua_Integer power = luaL_optinteger(L, -1, 1); lua_pop(L, 1);
+          if (wave < 1 || wave > (lua_Integer)waveCount || power < 1 || power > 16)
+              return luaL_error(L, "Wave index must exist; power must be an integer from 1 to 16");
+          lua_getfield(L, -1, "gain"); lua_Number gain = luaL_optnumber(L, -1, 255); lua_pop(L, 1);
+          if (!isfinite(gain) || gain < -1024 || gain > 1024) return luaL_error(L, "Gain must be finite and between -1024 and 1024");
+          channels[c].terms[t].wave = (int)wave - 1; channels[c].terms[t].power = (int)power; channels[c].terms[t].gain = gain;
+          lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+  }
+  // Finish validation before touching any pixels. Quantize only after mixing.
+  for (int i = (int)start; i < state.config.led_count; i++) {
+      lua_Number values[4];
+      for (size_t w = 0; w < waveCount; w++) {
+          lua_Number value = waves[w].offset;
+          for (int t = 0; t < waves[w].count; t++) {
+              const struct WaveTerm *term = &waves[w].terms[t];
+              value += term->amplitude * l_mathop(sin)(term->phase + i * term->step);
+          }
+          lua_Number minimum = waves[w].positive ? 0 : -1;
+          values[w] = value < minimum ? minimum : value > 1 ? 1 : value;
+      }
+      for (int c = 0; c < 6; c++) {
+          lua_Number value = channels[c].offset;
+          for (int t = 0; t < channels[c].count; t++) {
+              const struct MixTerm *term = &channels[c].terms[t];
+              lua_Number base = values[term->wave], powered = 1;
+              // Integer powers use multiplies instead of a general pow call.
+              for (int p = term->power; p; p >>= 1) { if (p & 1) powered *= base; if (p > 1) base *= base; }
+              value += term->gain * powered;
+          }
+          value = value < 0 ? 0 : value > 255 ? 255 : value;
+          if (channels[c].multiply) value *= values[channels[c].multiply - 1];
+          animationPixels[i][c] = (uint8_t)(value < 0 ? 0 : value); // Clamp above, then floor by truncation.
+      }
+      if ((i + 1) % 32 == 0 && i + 1 < state.config.led_count) {
+          // Bound uninterrupted work. Lua keeps the input tables alive across
+          // this continuation; reparse them on resume rather than save a frame
+          // or a descriptor allocation. Only completed frames are published.
+          taskYIELD(); TaskStatus_t current;
+          vTaskGetInfo(nullptr, &current, pdFALSE, eInvalid);
+          const uint32_t now = uint32_t(current.ulRunTimeCounter);
+          if (int32_t(now - luaDeadline) >= 0) luaBudgetError = "Animation exceeded its CPU limit (500 ms per call)";
+          if (lua_isyieldable(L) && (luaBudgetError || int32_t(now - luaSliceDeadline) >= 0))
+              return lua_yieldk(L, 0, i + 1, luaRenderWaves);
+          if (luaBudgetError) return luaL_error(L, "%s", luaBudgetError);
+      }
+  }
+  // Native work does not trigger Lua instruction hooks. Check CPU time here
+  // so repeated bulk calls cannot postpone cooperative yielding/hard limits.
+  luaHook(L, nullptr);
+  return 0;
 }
 static String startAnimation(luxio_Script &script) {
   std::unique_ptr<luxio_AnimationParameter[]> parameters(new (std::nothrow) luxio_AnimationParameter[16]{}); pb_size_t count = 0;
@@ -266,6 +374,59 @@ static String startAnimation(luxio_Script &script) {
       for (int c = 0; c < 6; c++) animationPixels[index][c] = values[c];
       return 0;
     }); lua_setglobal(L, "luxio_set_pixel_color");
+    // BULK_API_BEGIN
+    // Bounded native loops write the existing working frame; no extra LED array.
+    for (bool ranged : {false, true}) {
+      lua_pushboolean(L, ranged);
+      lua_pushcclosure(L, [](lua_State *L) -> int {
+        const int ranged = lua_toboolean(L, lua_upvalueindex(1));
+        const lua_Integer start = ranged ? luaL_checkinteger(L, 1) : 0;
+        const lua_Integer length = ranged ? luaL_checkinteger(L, 2) : state.config.led_count;
+        if (start < 0 || start > state.config.led_count || length < 0 || length > state.config.led_count - start)
+            return luaL_error(L, "Pixel range out of bounds (zero-based start, count)");
+        uint8_t values[6];
+        for (int c = 0; c < 6; c++) {
+            lua_Integer value = luaL_optinteger(L, c + (ranged ? 3 : 1), 0);
+            if (value < 0 || value > 255) return luaL_error(L, "Channels must be 0-255");
+            values[c] = (uint8_t)value;
+        }
+        if ((!strcmp(state.config.strip_type, "WS2805") && values[3]) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (values[4] || values[5])) || (!strcmp(state.config.strip_type, "WS2812") && (values[3] || values[4] || values[5]))) return luaL_error(L, "Channel unavailable on this strip type");
+        for (lua_Integer i = start; i < start + length; i++) memcpy(animationPixels[i], values, 6);
+        return 0;
+      }, 1);
+      lua_setglobal(L, ranged ? "luxio_fill_range" : "luxio_fill");
+    }
+    lua_pushcclosure(L, [](lua_State *L) -> int {
+      lua_Number hue = luaL_checknumber(L, 1), step = luaL_optnumber(L, 2, 0);
+      lua_Number saturation = luaL_optnumber(L, 3, 1), value = luaL_optnumber(L, 4, 1);
+      if (!isfinite(hue) || !isfinite(step) || !isfinite(saturation) || !isfinite(value) ||
+          saturation < 0 || saturation > 1 || value < 0 || value > 1)
+          return luaL_error(L, "HSV requires finite hue/step and saturation/value from 0 to 1");
+      hue -= l_mathop(floor)(hue); step -= l_mathop(floor)(step);
+      const int high = (int)l_mathop(floor)(255 * value);
+      const int low = (int)l_mathop(floor)(255 * value * (1 - saturation));
+      for (int i = 0; i < state.config.led_count; i++) {
+          if (step == 0 && i > 0) { memcpy(animationPixels[i], animationPixels[0], 6); continue; }
+          lua_Number h = hue + i * step;
+          h = (h - l_mathop(floor)(h)) * 6;
+          const int sector = (int)l_mathop(floor)(h);
+          const int rising = (int)l_mathop(floor)((high - low) * (h - sector));
+          const int up = low + rising, down = high - rising;
+          uint8_t rgb[6] = {0};
+          switch (sector) {
+              case 0: rgb[0] = high; rgb[1] = up; rgb[2] = low; break;
+              case 1: rgb[0] = down; rgb[1] = high; rgb[2] = low; break;
+              case 2: rgb[0] = low; rgb[1] = high; rgb[2] = up; break;
+              case 3: rgb[0] = low; rgb[1] = down; rgb[2] = high; break;
+              case 4: rgb[0] = up; rgb[1] = low; rgb[2] = high; break;
+              default: rgb[0] = high; rgb[1] = low; rgb[2] = down; break;
+          }
+          memcpy(animationPixels[i], rgb, 6);
+      }
+      return 0;
+    }, 0); lua_setglobal(L, "luxio_fill_hsv");
+    lua_pushcclosure(L, [](lua_State *L) -> int { return luaRenderWaves(L, LUA_OK, 0); }, 0); lua_setglobal(L, "luxio_render_waves");
+    // BULK_API_END
     lua_pushcfunction(L, [](lua_State *L) -> int {
       const char *name = luaL_checkstring(L, 1);
       for (size_t i = 0; i < state.parameters_count; ++i) {

@@ -1,0 +1,42 @@
+[
+  {
+    "name": "bounds and no partial writes",
+    "source": "local n = luxio_get_pixel_count()\nfunction loop()\n  luxio_fill(11, 22, 33)\n  assert(not pcall(luxio_fill_range, -1, 1, 9))\n  assert(not pcall(luxio_fill_range, n, 1, 9))\n  assert(not pcall(luxio_fill_range, 0, n + 1, 9))\n  assert(not pcall(luxio_fill_range, 0.5, 1, 9))\n  assert(not pcall(luxio_fill_range, 0, -1, 9))\n  assert(not pcall(luxio_fill, 256))\n  assert(not pcall(luxio_fill, -1))\n  assert(not pcall(luxio_fill, 1.5))\n  assert(not pcall(luxio_fill, 1/0))\n  assert(not pcall(luxio_fill_hsv, 0/0))\n  assert(not pcall(luxio_fill_hsv, 0, 1/0))\n  assert(not pcall(luxio_fill_hsv, 0, 0, -0.1))\n  assert(not pcall(luxio_fill_hsv, 0, 0, 1, 1.1))\n  local kind = luxio_get_color_type()\n  if kind == \"RGBCCT\" then assert(not pcall(luxio_fill, 0, 0, 0, 1))\n  else assert(not pcall(luxio_fill, 0, 0, 0, 0, 1)) end\n  luxio_fill_range(n, 0, 255)\n  luxio_fill_range(n - 1, 1, 44, 55, 66)\nend"
+  },
+  {
+    "name": "HSV spectrum",
+    "source": "function loop() luxio_fill_hsv(0, 1 / 6) end"
+  },
+  {
+    "name": "desaturated uniform HSV",
+    "source": "function loop() luxio_fill_hsv(-9.5, 0, 0, 0.5) end"
+  },
+  {
+    "name": "white channels",
+    "source": "function loop()\n local kind = luxio_get_color_type()\n if kind == \"RGBCCT\" then luxio_fill(0, 0, 0, 0, 180, 75)\n elseif kind == \"RGBW\" then luxio_fill(0, 0, 0, 255)\n else luxio_fill(255, 190, 105) end\nend"
+  },
+  {
+    "name": "wrapped reverse HSV",
+    "source": "function loop() luxio_fill_hsv(-1/3, -1/6) end"
+  },
+  {
+    "name": "HSV clears white channels",
+    "source": "function loop()\n local kind = luxio_get_color_type()\n if kind == \"RGBCCT\" then luxio_fill(0,0,0,0,180,75)\n elseif kind == \"RGBW\" then luxio_fill(0,0,0,255)\n else luxio_fill(255,190,105) end\n luxio_fill_hsv(1)\nend"
+  },
+  {
+    "name": "wave mixing, clipping, powers and modulation",
+    "source": "local waves = {{offset = 0.5}, {offset = 0.5}, {positive = true, offset = -1}}\nfunction loop()\n luxio_render_waves(waves, {\n  {offset = 200, multiply = 2, {wave = 1, gain = 200}},\n  {{wave = 1, gain = 255, power = 3}},\n  {{wave = 3, gain = 255, power = 2}}})\nend"
+  },
+  {
+    "name": "sine waves and negative steps",
+    "source": "function loop()\n luxio_render_waves({{offset = 0.5, {amplitude = 0.25, phase = 0.3, step = -0.2}, {amplitude = 0.1, phase = -0.7, step = 0.4}}}, {{{wave = 1}}, {{wave = 1, gain = 100, power = 8}}, {offset = -10}})\nend"
+  },
+  {
+    "name": "wave white channels",
+    "source": "function loop()\n local channels = {}\n local kind = luxio_get_color_type()\n if kind == \"RGBCCT\" then channels[5] = {{wave = 1, gain = 180}}; channels[6] = {{wave = 1, gain = 75}}\n elseif kind == \"RGBW\" then channels[4] = {{wave = 1}}\n else channels = {{{wave = 1}}, {{wave = 1, gain = 190}}, {{wave = 1, gain = 105}}} end\n luxio_render_waves({{offset = 1}}, channels)\nend"
+  },
+  {
+    "name": "invalid waves leave the entire frame unchanged",
+    "source": "function loop()\n luxio_fill(11,22,33)\n local invalid = {\n  {{}, {}}, {{{},{},{},{},{}}, {}}, {{{offset=1/0}}, {}},\n  {{{positive=1}}, {}}, {{{{phase=0/0}}}, {}}, {{{{step=1e20}}}, {}},\n  {{{{amplitude=5}}}, {}}, {{{{},{},{},{},{}}}, {}},\n  {{{}}, {{{wave=2}}}}, {{{}}, {{{wave=1,power=1.5}}}},\n  {{{}}, {{{wave=1,power=0}}}}, {{{}}, {{{wave=1,power=17}}}},\n  {{{}}, {{{wave=1,gain=1/0}}}}, {{{}}, {{offset=0/0}}},\n  {{{}}, {{multiply=2}}}, {{{}}, {{multiply=0.5}}},\n  {{{}}, {{{wave=1},{wave=1},{wave=1},{wave=1},{wave=1}}}},\n  {{{}}, {{},{},{},{},{},{},{}}}, {{{}}, {42}}, {{false}, {}},\n }\n for _, args in ipairs(invalid) do assert(not pcall(luxio_render_waves,args[1],args[2])) end\n local kind = luxio_get_color_type()\n local bad = kind == \"RGBCCT\" and 4 or 5\n assert(not pcall(luxio_render_waves, {{offset=1}}, {[bad]={{wave=1}}}))\nend"
+  }
+]

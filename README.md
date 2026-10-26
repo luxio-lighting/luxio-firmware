@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=35 tools/build-firmware.sh all
+LUXIO_BUILD=36 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=35 tools/build-firmware.sh esp32
+LUXIO_BUILD=36 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -149,10 +149,18 @@ start of a frame when every pixel should use the same animation timestamp.
 
 Run `python3 tools/test-animation-scheduler.py` for real-Lua sanitizer tests of
 slicing, atomic frame publication, replacement, limits, cleanup and counter wrap.
+Firmware Lua uses 32-bit floats and float math functions, including in C89
+compatibility builds; integer widths are unchanged. See the
+[precision benchmark](docs/lua-precision-benchmark.md) for device measurements,
+precision tradeoffs and reproduction instructions.
+The [bulk animation API and benchmark](docs/lua-bulk-benchmark.md) cover native
+fill, range fill and HSV rendering, including compatibility fallbacks.
 For an opt-in device regression, run `DEVICE_ADDRESS=<ip> ANIMATION_PRESETS=<preset-json> node --import tsx tools/test-animation-runtime-device.ts`. The JSON can be produced
 by the iOS preset exporter; omitting it tests custom frames and errors only.
 The test temporarily changes LED count to 256 and 1024, then restores the active
 animation, settings, brightness and power. It leaves saved libraries unchanged.
+The [wave renderer and remaining presets](docs/lua-wave-benchmark.md) add native
+wave mixing, modulation, and optimized twinkle/scanner rendering.
 
 ## Power and brightness (build 11)
 
@@ -184,7 +192,7 @@ PSRAM-equipped boards, released with the VM, and never persisted by this feature
 
 Animation control declarations support `Slider`, `Number` (numeric input), and `Checkbox` in build 21. `Boolean` remains a legacy alias. The protocol carries the numeric control style in parameter field 7.
 
-Preset catalogs belong to the mobile apps and Studio. Firmware accepts client-supplied Lua and parameter declarations; it does not bundle or select built-in animations. Files under `tools/fixtures/` are storage-test inputs only.
+Preset catalogs belong to the mobile apps and Studio. Firmware accepts client-supplied Lua and parameter declarations; it does not bundle or select built-in animations. Files under `tools/fixtures/` are test and benchmark inputs only.
 
 ## Lua color capabilities (build 22)
 
@@ -307,3 +315,17 @@ The original ESP32 release now uses the source-built DMA/Matter/BLE profile from
 existing Arduino recovery bootloader and verifies matching partition tables.
 S3/C3 and C5/C6 keep their existing builders. All packages retain 4 MB layouts.
 See [profile validation](docs/lowram-esp32.md) for measured peak-memory limits.
+
+
+## Release build 36
+
+Lua uses 32-bit floats and float math functions. Native fill, range, HSV and wave
+rendering write the existing pixel buffer; the wave renderer yields within long
+frames so controls remain responsive. The current app and Studio presets require
+this API directly, without older-firmware fallbacks. All eight remaining presets
+are optimized, including dedicated white output for Candle. See the
+[paired ESP32 benchmarks](docs/lua-wave-benchmark.md).
+
+Historical Lua implementations in benchmark fixtures are reference workloads,
+not compatibility code in the shipped presets. The signed recovery update flow
+and 4 MB layouts remain the release format for all five chips.

@@ -15,10 +15,11 @@
     "bonjour-service": "^1.3.0"
   },
   "scripts": {
-    "test": "mkdir -p .sdk && python3 tools/test-package-firmware.py && python3 tools/test-startup-output.py && python3 tools/test-animation-scheduler.py && python3 tools/test-startup-storage.py && c++ -std=c++17 -fsanitize=address,undefined tools/test-transitions.cpp -o .sdk/test-transitions && .sdk/test-transitions && c++ -std=c++17 -fsanitize=address,undefined tools/test-led-encoder.cpp -o .sdk/test-led-encoder && .sdk/test-led-encoder && python3 tools/test-update-targets.py && node --import tsx --test tests/*.test.ts && tools/test-script-storage.sh",
+    "test": "npm run test:bulk && mkdir -p .sdk && python3 tools/test-package-firmware.py && python3 tools/test-startup-output.py && python3 tools/test-animation-scheduler.py && python3 tools/test-startup-storage.py && c++ -std=c++17 -fsanitize=address,undefined tools/test-transitions.cpp -o .sdk/test-transitions && .sdk/test-transitions && c++ -std=c++17 -fsanitize=address,undefined tools/test-led-encoder.cpp -o .sdk/test-led-encoder && .sdk/test-led-encoder && python3 tools/test-update-targets.py && node --import tsx --test tests/*.test.ts && tools/test-script-storage.sh",
     "check": "tsc --noEmit",
     "postinstall": "node tools/materialize-dependencies.mjs",
     "device": "node --import tsx shared/device/src/server.ts",
-    "sync:protocol": "node tools/sync-protocol.mjs"
+    "sync:protocol": "node tools/sync-protocol.mjs",
+    "test:bulk": "node --import tsx tools/test-bulk-api.ts"
   }
 }

@@ -9,7 +9,7 @@ on:
         description: Firmware build number (increase for each new release)
         type: number
         required: true
-        default: 35
+        default: 36
       publish:
         description: Upload binaries to MongoDB through the API and register updates
         type: boolean

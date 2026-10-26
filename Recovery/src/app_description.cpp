@@ -4,7 +4,7 @@
 #define LUXIO_STRING_VALUE_INNER(value) #value
 #define LUXIO_STRING_VALUE(value) LUXIO_STRING_VALUE_INNER(value)
 #ifndef LUXIO_BUILD
-#define LUXIO_BUILD 31
+#define LUXIO_BUILD 36
 #endif
 // Override the SDK's weak descriptor so main can require a signature-verifying recovery build.
 extern "C" const esp_app_desc_t esp_app_desc __attribute__((section(".rodata_desc"), used)) = {
