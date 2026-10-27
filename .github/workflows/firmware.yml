@@ -9,7 +9,7 @@ on:
         description: Firmware build number (increase for each new release)
         type: number
         required: true
-        default: 37
+        default: 38
       publish:
         description: Upload binaries to MongoDB through the API and register updates
         type: boolean
@@ -65,6 +65,9 @@ jobs:
       - name: Test signed OTA verifier for every chip
         if: matrix.chip == 'esp32'
         run: node tools/test-ota-signatures.mjs
+      - name: Test configured Bluetooth names and queued renames
+        if: matrix.chip == 'esp32'
+        run: python3 tools/test-bluetooth-name.py
       - name: Build firmware and enforce image identity, partition sizes and stack budgets
         env:
           LUXIO_BUILD: ${{ needs.matrix.outputs.build }}

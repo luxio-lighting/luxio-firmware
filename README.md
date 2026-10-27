@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=37 tools/build-firmware.sh all
+LUXIO_BUILD=38 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=37 tools/build-firmware.sh esp32
+LUXIO_BUILD=38 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -346,3 +346,13 @@ Reconnecting after reset creates a new device identity and requires setup again.
 The web app requires confirmation and removes cached connections only after the
 device acknowledges. Older firmware keeps the action disabled. Native mobile
 apps have no Factory Reset control.
+
+## Release build 38
+
+Bluetooth discovery now advertises the saved device name at startup and refreshes
+it after a successful settings rename, without disconnecting the active client.
+The Luxio service UUID remains in the advertising packet, so names without a
+Luxio prefix remain discoverable. Names longer than the 29-byte scan-response
+limit are shortened at a UTF-8 character boundary; the full name remains in
+settings and the control API. This build also restores firmware capability flags
+after loading pre-update lighting state.

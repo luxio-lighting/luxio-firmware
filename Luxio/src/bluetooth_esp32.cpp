@@ -10,6 +10,9 @@
 #include <esp32-hal-bt.h>
 #include <esp_heap_caps.h>
 #include "control_error.h"
+#include "bluetooth_name.h"
+#include <freertos/queue.h>
+#include "nimble/porting/nimble/include/nimble/nimble_port.h"
 #include <memory>
 
 extern size_t dispatch(const uint8_t *, size_t, std::unique_ptr<uint8_t[]> &, size_t);
@@ -20,6 +23,15 @@ static uint8_t *receiveBuffer;
 static uint32_t header, expected, received, lastByte, session;
 static uint16_t connection;
 static bool connected, ready, subscribed;
+static QueueHandle_t nameQueue;
+static ble_npl_event nameEvent;
+
+void setBluetoothName(const char *name) {
+  if (!nameQueue) return;
+  const BluetoothName next(name);
+  xQueueOverwrite(nameQueue, &next);
+  ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &nameEvent);
+}
 
 class Notifications : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t value) override {
@@ -71,13 +83,14 @@ class Requests : public NimBLECharacteristicCallbacks {
 };
 static Connections connectionCallbacks;
 static Requests requestCallbacks;
-void startBluetooth() {
+void startBluetooth(const char *name) {
   // Link Arduino's strong btInUse() so core startup retains BLE controller RAM.
   // NimBLE-Arduino's own link anchor is disabled in this pinned SDK build.
   btStarted();
   bufferMutex = xSemaphoreCreateMutex();
   if (!bufferMutex) abort();
-  if (!NimBLEDevice::init("Luxio")) abort();
+  const BluetoothName initial(name);
+  if (!NimBLEDevice::init(initial.value)) abort();
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   server = NimBLEDevice::createServer(); server->setCallbacks(&connectionCallbacks, false);
@@ -88,7 +101,20 @@ void startBluetooth() {
   tx->setCallbacks(&notificationCallbacks);
   if (!server->start()) abort();
   auto *advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(service->getUUID()); advertising->setName("Luxio"); advertising->enableScanResponse(true); if (!advertising->start()) abort();
+  advertising->addServiceUUID(service->getUUID()); advertising->enableScanResponse(true);
+  NimBLEAdvertisementData scan;
+  scan.setName(initial.value, initial.complete);
+  if (!advertising->setScanResponseData(scan) || !advertising->start()) abort();
+  ble_npl_event_init(&nameEvent, [](ble_npl_event *) {
+    BluetoothName next;
+    if (xQueueReceive(nameQueue, &next, 0) != pdTRUE) return;
+    if (!NimBLEDevice::setDeviceName(next.value)) return;
+    NimBLEAdvertisementData scan;
+    scan.setName(next.value, next.complete);
+    NimBLEDevice::getAdvertising()->setScanResponseData(scan);
+  }, nullptr);
+  nameQueue = xQueueCreate(1, sizeof(BluetoothName));
+  if (!nameQueue) abort();
   xTaskCreate([](void *) {
     for (;;) {
       xSemaphoreTake(bufferMutex, portMAX_DELAY);
@@ -136,5 +162,6 @@ void startBluetooth() {
 #elif CONFIG_IDF_TARGET_ESP32 && !CONFIG_BT_NIMBLE_ENABLED
 // Retain the working USB/Wi-Fi/Matter stack until combined BLE fits in RAM.
 // Do not link the BLE controller: Arduino must release its reserved memory.
-void startBluetooth() {}
+void startBluetooth(const char *) {}
+void setBluetoothName(const char *) {}
 #endif // CONFIG_IDF_TARGET_ESP32

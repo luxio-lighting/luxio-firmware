@@ -648,3 +648,22 @@ No physical device was reset; hardware reset qualification remains outstanding.
 | esp32c6 | 2,423,856 | 1,091,072 |
 
 Build 37 was published on channel 0 by [workflow 40523831559](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40523831559), from commit `e2ac385`. The table above records the published packages. Independent checks downloaded all 25 parts and verified sizes, SHA-256 hashes, embedded chip IDs, flash addresses and signed manifests. The HTTP update/download path also passed without redirects. No physical device was flashed or reset during this release.
+
+## Build 38 configured Bluetooth names (2026-10-27)
+
+Bluetooth GAP and scan-response names now use the saved device name. Successful
+settings renames queue a host-task update, without taking the BLE receive mutex,
+restarting advertising or disconnecting the client. The primary advertisement
+retains the Luxio service UUID used by web, iOS and Android discovery. The
+29-byte scan-response name is shortened at a UTF-8 boundary when necessary;
+settings and the control API retain the full name. Both native NimBLE and the
+diagnostic NimBLE-Arduino implementation use this behavior.
+
+The build also includes the post-OTA capability restoration fix: loading an older
+lighting snapshot no longer clears `factory_reset_supported`.
+
+Host tests exercise the production native initialization, advertising and queued
+rename code, including changes while dispatch is locked, coalesced changes,
+re-advertising, host resynchronization, empty-name fallback and ASCII/UTF-8 length
+boundaries. The full firmware regression suite and TypeScript checks pass. These
+checks do not constitute physical Bluetooth qualification.

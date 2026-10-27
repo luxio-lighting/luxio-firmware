@@ -3,6 +3,8 @@
 // Luxio owns BLE; Matter uses IP transports only.
 #include <esp_heap_caps.h>
 #include "control_error.h"
+#include "bluetooth_name.h"
+#include <freertos/queue.h>
 #include <memory>
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
@@ -25,6 +27,18 @@ static bool ready, subscribed;
 static uint32_t session;
 static SemaphoreHandle_t bufferMutex;
 static uint8_t ownAddressType;
+static QueueHandle_t nameQueue;
+static ble_npl_event nameEvent;
+static bool nameComplete;
+
+void setBluetoothName(const char *name) {
+  if (!nameQueue) return;
+  const BluetoothName next(name);
+  // SET_CONFIG may hold the BLE receive mutex. Apply on the host task later.
+  xQueueOverwrite(nameQueue, &next);
+  ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &nameEvent);
+}
+
 static void advertise();
 static int gapEvent(ble_gap_event *event, void *) {
   xSemaphoreTake(bufferMutex, portMAX_DELAY);
@@ -50,7 +64,7 @@ static void advertise() {
   fields.uuids128 = const_cast<ble_uuid128_t *>(&serviceUuid); fields.num_uuids128 = 1; fields.uuids128_is_complete = 1;
   ble_gap_adv_set_fields(&fields);
   ble_hs_adv_fields scan = {}; const char *name = ble_svc_gap_device_name();
-  scan.name = reinterpret_cast<const uint8_t *>(name); scan.name_len = strlen(name); scan.name_is_complete = 1;
+  scan.name = reinterpret_cast<const uint8_t *>(name); scan.name_len = strlen(name); scan.name_is_complete = nameComplete;
   ble_gap_adv_rsp_set_fields(&scan);
   ble_gap_adv_params parameters = {}; parameters.conn_mode = BLE_GAP_CONN_MODE_UND; parameters.disc_mode = BLE_GAP_DISC_MODE_GEN;
   ble_gap_adv_start(ownAddressType, nullptr, BLE_HS_FOREVER, &parameters, gapEvent, nullptr);
@@ -82,7 +96,7 @@ static int writeRequest(uint16_t conn, uint16_t, ble_gatt_access_ctxt *context, 
 }
 static ble_gatt_chr_def characteristics[3];
 static ble_gatt_svc_def services[2];
-void startBluetooth() {
+void startBluetooth(const char *name) {
 #if CONFIG_IDF_TARGET_ESP32
   btStarted(); // Retain controller RAM during Arduino startup. NimBLE initializes it below.
 #endif
@@ -97,7 +111,24 @@ void startBluetooth() {
   ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
   ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
   ble_store_config_init();
-  ble_svc_gap_init(); ble_svc_gatt_init(); ble_svc_gap_device_name_set("Luxio");
+  ble_svc_gap_init(); ble_svc_gatt_init();
+  const BluetoothName initial(name);
+  nameComplete = initial.complete;
+  if (ble_svc_gap_device_name_set(initial.value)) abort();
+  ble_npl_event_init(&nameEvent, [](ble_npl_event *) {
+    BluetoothName next;
+    if (xQueueReceive(nameQueue, &next, 0) != pdTRUE) return;
+    if (ble_svc_gap_device_name_set(next.value)) return;
+    nameComplete = next.complete;
+    if (!ble_hs_synced()) return; // The sync callback will advertise the new name.
+    ble_hs_adv_fields scan = {};
+    scan.name = reinterpret_cast<const uint8_t *>(next.value);
+    scan.name_len = strlen(next.value); scan.name_is_complete = next.complete;
+    // Refresh the scan response without restarting advertising or the connection.
+    ble_gap_adv_rsp_set_fields(&scan);
+  }, nullptr);
+  nameQueue = xQueueCreate(1, sizeof(BluetoothName));
+  if (!nameQueue) abort();
   characteristics[0].uuid = &rxUuid.u; characteristics[0].access_cb = writeRequest; characteristics[0].flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC;
   characteristics[1].uuid = &txUuid.u; characteristics[1].access_cb = writeRequest; characteristics[1].flags = BLE_GATT_CHR_F_NOTIFY; characteristics[1].val_handle = &txHandle;
   services[0].type = BLE_GATT_SVC_TYPE_PRIMARY; services[0].uuid = &serviceUuid.u; services[0].characteristics = characteristics;

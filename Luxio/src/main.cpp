@@ -37,13 +37,14 @@
 #include "luxio.pb.h"
 #include "vendor/nanopb/pb_decode.h"
 #include "vendor/nanopb/pb_encode.h"
+extern void setBluetoothName(const char *);
 extern "C" {
 #include "vendor/lua/lua.h"
 #include "vendor/lua/lauxlib.h"
 #include "vendor/lua/lualib.h"
 }
 #ifndef LUXIO_BUILD
-#define LUXIO_BUILD 37
+#define LUXIO_BUILD 38
 #endif
 #ifndef LUXIO_CLOUD_URL
 #define LUXIO_CLOUD_URL "http://api.luxio.lighting"
@@ -747,7 +748,9 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       const size_t previousSize = prefs.getBytesLength("config");
       const bool unchanged = previousSize == encoder.bytes_written && prefs.getBytes("config", previous, previousSize) == previousSize && !memcmp(previous, saved, previousSize);
       if (!unchanged && prefs.putBytes("config", saved, encoder.bytes_written) != encoder.bytes_written) { error = "Unable to save settings"; break; }
+      const bool nameChanged = strcmp(c.name, state.config.name) != 0;
       state.config = c; animationFrameReady = true; // Apply relay changes even during a long frame.
+      if (nameChanged) setBluetoothName(state.config.name);
       if (radioChanged) radioRestartAt = millis() + 1000;
       if (httpServer) MDNS.setInstanceName(state.config.name);
       if (httpServer) MDNS.addServiceTxt("luxio", "tcp", "strip", (const char *)c.strip_type);
@@ -1299,7 +1302,7 @@ static void cloudTask(void *) {
   }
 }
 
-extern void startBluetooth();
+extern void startBluetooth(const char *);
 void setup() {
   // Complete a confirmed reset before any user state or radios are initialized.
   {
@@ -1511,7 +1514,7 @@ void setup() {
   httpd_uri_t websocket = {}; websocket.uri = "/api/ws"; websocket.method = HTTP_GET; websocket.handler = websocketHandler; websocket.is_websocket = true; httpd_register_uri_handler(httpServer, &websocket);
   xTaskCreate(cloudTask, "luxio-cloud", LUXIO_INTERNAL_RAM_RADIOS ? 8192 : 12288, nullptr, 1, nullptr);
   }
-  startBluetooth();
+  startBluetooth(state.config.name);
   // Reaching initialized local controls acknowledges the completed request.
   // An offline device must not roll back merely because Matter is waiting for Wi-Fi.
   // No timer, boot path or Matter callback checks for or starts a new update.
