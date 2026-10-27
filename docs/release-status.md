@@ -667,3 +667,21 @@ rename code, including changes while dispatch is locked, coalesced changes,
 re-advertising, host resynchronization, empty-name fallback and ASCII/UTF-8 length
 boundaries. The full firmware regression suite and TypeScript checks pass. These
 checks do not constitute physical Bluetooth qualification.
+
+All five local production builds pass compilation, packaging, image identity,
+partition capacity and stack-budget checks. The separate diagnostic original
+ESP32/NimBLE-Arduino sources compile, but that older non-Matter profile still
+fails linking with a 684-byte IRAM overflow. Rebuilding the previous source with
+the same settings produces the identical overflow; it is not a build-38 regression
+and that profile is not published. The production original ESP32 uses the
+source-built native NimBLE/DMA/Matter profile and passes.
+
+Build 38 was published on channel 0 by [workflow 40533741490](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40533741490), from commit `e3c23fa623e1b37afd91a8d6b1c015677da22f95`. Independent checks downloaded all 25 parts, verified their sizes, SHA-256 hashes, embedded chip IDs and flash addresses, and verified all five signed manifests. The HTTP update/download paths also passed without redirects. No physical device was flashed or changed during this release.
+
+| Target | Published application bytes | SHA-256 |
+| --- | ---: | --- |
+| esp32 | 2,301,184 | `4c0b1f33c6fda27005cc9c3c1def18f92d4a45aceb1feafbfb057d39e8f2bd93` |
+| esp32s3 | 2,238,432 | `d0f35b8e2caafe943f5f23fec01003fc8f468bd10d1a0522e981ab8e3a5fda3b` |
+| esp32c3 | 2,284,672 | `54db9bab0cf7508bc7368abf27e57f6bbba8852b041d39393c94cf193904d305` |
+| esp32c5 | 2,492,080 | `9b4f992712f731578e43382deff6b46de2ed0e649c5dd8ed65b1dd232a1ccf0f` |
+| esp32c6 | 2,424,608 | `513de77c42225aed0716965ac350238cc955f8bb4cb70acaabbce88337f48114` |
