@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -42,6 +43,10 @@ struct Preferences {
 static std::string error;
 static luxio_Request input;
 static luxio_Response output;
+static luxio_State state;
+static size_t testStrlcpy(char *dst, const char *src, size_t size) { auto len = strlen(src); if(size) { strncpy(dst, src, size); dst[size-1] = 0; } return len; }
+#define strlcpy testStrlcpy
+struct { struct IP { std::string toString() { return "192.0.2.1"; } }; IP localIP() { return {}; } } WiFi;
 static void command() {
   auto *request = &input; auto *response = &output;
   output = {}; error.clear();
@@ -49,6 +54,7 @@ static void command() {
 // PRODUCTION_COMMAND
     default: assert(false);
   }
+// PRODUCTION_REPLY
 }
 static void boot() {
 // PRODUCTION_BOOT
@@ -67,6 +73,7 @@ int main() {
   failMarker = false; command();
   assert(error.empty() && output.factory_reset_accepted && factoryResetPending && marker && factoryResetAt == 1100);
   assert(events.empty() && userFiles && crashData && userNvs); // Acknowledge before any erasure.
+  assert(output.state == nullptr); // Keep the acknowledgement short on slow BLE links.
   now = 500; command(); assert(error.empty() && output.factory_reset_accepted && factoryResetAt == 1100);
   // Fail each erase stage before NVS completion, then simulate another boot.
   for (const auto &stage : {"spiffs", "coredump", "nvs_deinit", "nvs_erase"}) {

@@ -1063,8 +1063,10 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
     network.disconnect_count = wifiDisconnectCount.load(); network.last_disconnect_reason = wifiDisconnectReason.load();
   }
   if (error.length()) strlcpy(response->error, error.c_str(), sizeof(response->error));
-  // Borrow the state under stateMutex instead of allocating another full copy.
-  else { response->state = &state; strlcpy(state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(state.lan_ip)); }
+  // Keep the reset acknowledgement small enough to send before restart, even
+  // with a minimum BLE MTU and a large active gradient or animation.
+  // Otherwise borrow state under stateMutex instead of allocating a full copy.
+  else if (!response->factory_reset_accepted) { response->state = &state; strlcpy(state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(state.lan_ip)); }
   size_t size = encodeControlResponse(*response, output, prefix);
   if (!size) {
     memset(response, 0, sizeof(*response));
