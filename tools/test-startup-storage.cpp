@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 using std::min;
-#define LUXIO_BUILD 34
+#define LUXIO_BUILD 37
 #define LUXIO_DEFAULT_GPIO 4
 #define constrain(x, lo, hi) std::min(std::max((x), decltype(x)(lo)), decltype(x)(hi))
 static size_t testStrlcpy(char *out, const char *in, size_t n) { size_t size = strlen(in); if (n) { memcpy(out, in, std::min(size, n-1)); out[std::min(size, n-1)] = 0; } return size; }
@@ -79,6 +79,8 @@ int main() {
   state.mode = luxio_Mode_COLOR; state.has_gradient = false; state.color = {5, 11, 17, 255, 0, 0};
   uint8_t config[luxio_Config_size]; auto encoder = pb_ostream_from_buffer(config, sizeof(config));
   assert(pb_encode(&encoder, luxio_Config_fields, &state.config)); storedConfig.assign(config, config + encoder.bytes_written);
+  // Emulate an OTA snapshot from build 36, before reset capability existed.
+  state.build = 36; state.factory_reset_supported = false;
   assert(saveUpdateState()); const auto original = files["/startup.pb"];
   // A normal cold boot ignores even a valid old output snapshot.
   memset(&state, 0, sizeof(state)); loadState();
@@ -86,6 +88,7 @@ int main() {
   resumeOutputFlag = true;
   memset(&state, 0, sizeof(state)); loadState();
   assert(!state.on && state.brightness == 4 && state.config.led_count == 1024 && !state.config.matter.enabled);
+  assert(state.build == 37 && state.factory_reset_supported);
   assert(state.color.white == 255 && state.color.red == 5 && state.mode == luxio_Mode_COLOR);
   state.on = true; state.brightness = 200;
   for (size_t cut = 0; cut < original.size()+4; cut++) {

@@ -1334,7 +1334,7 @@ void setup() {
   prefs.begin("luxio", false);
   if (!LittleFS.begin(true)) abort();
   LittleFS.remove("/startup.pending");
-  state = {}; state.factory_reset_supported = true; state.has_config = state.has_color = true;
+  state = {}; state.has_config = state.has_color = true;
   state.config = {"Luxio", "WS2805", 1, LUXIO_DEFAULT_GPIO, 0}; state.brightness = 16; state.on = true;
   size_t configSize = prefs.getBytesLength("config");
   if (configSize && configSize <= luxio_Config_size) {
@@ -1393,6 +1393,8 @@ void setup() {
   savedFile.close();
   if (!restored) startup.reset();
   state.brightness = constrain(state.brightness, 1, 256); state.build = LUXIO_BUILD;
+  // Capabilities belong to this firmware, not the pre-update output snapshot.
+  state.factory_reset_supported = true;
   if (!state.config.has_wifi) { state.config.has_wifi = true; state.config.wifi.enabled = true; }
   if (!state.config.has_matter) { state.config.has_matter = true; state.config.matter.enabled = true; }
   // Size all three frames for this strip rather than reserving 18 KiB for 1024 LEDs.
