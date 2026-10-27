@@ -22,6 +22,7 @@
 #include <esp_heap_caps.h>
 #include <esp_http_server.h>
 #include <esp_ota_ops.h>
+#include <nvs_flash.h>
 #include <driver/gpio.h>
 #include <driver/rmt_tx.h>
 #include <driver/spi_master.h>
@@ -42,7 +43,7 @@ extern "C" {
 #include "vendor/lua/lualib.h"
 }
 #ifndef LUXIO_BUILD
-#define LUXIO_BUILD 36
+#define LUXIO_BUILD 37
 #endif
 #ifndef LUXIO_CLOUD_URL
 #define LUXIO_CLOUD_URL "http://api.luxio.lighting"
@@ -105,7 +106,8 @@ static char animationError[160];
 static uint32_t luaDeadline, animationStarted, lastFrame;
 static int luaInstructions;
 static bool wifiPending, rebootPending;
-static uint32_t radioRestartAt;
+static uint32_t radioRestartAt, factoryResetAt;
+static bool factoryResetPending;
 static String wifiSsid, wifiPassword;
 static std::atomic<uint32_t> wifiDisconnectCount{0}, wifiDisconnectReason{0};
 static bool wifiScanning, wifiScanPending;
@@ -609,7 +611,20 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
     responseGradient.reset(new (std::nothrow) luxio_Gradient{});
     if (!responseGradient) error = "Not enough memory for this gradient operation";
   }
+  if (factoryResetPending && request->operation != luxio_Operation_GET_STATE && request->operation != luxio_Operation_FACTORY_RESET) error = "Factory reset is in progress";
   if (decoded && !error.length()) switch (request->operation) {
+    case luxio_Operation_FACTORY_RESET:
+      if (!request->factory_reset_confirmed) error = "Factory reset requires confirmation";
+      else if (rebootPending || radioRestartAt || updateChecking) error = "Wait for the current restart or update check to finish";
+      else if (!factoryResetPending && !prefs.putBool("factory-reset", true)) error = "Unable to save factory reset request";
+      else {
+        // Acknowledge on the current transport before restarting. The persistent
+        // marker makes erasure resume after a power interruption.
+        if (!factoryResetPending) factoryResetAt = millis() + 1000;
+        factoryResetPending = true;
+        response->factory_reset_accepted = true;
+      }
+      break;
     case luxio_Operation_GET_STATE: break;
     case luxio_Operation_SET_COLOR: {
       auto &c = request->color;
@@ -1284,6 +1299,25 @@ static void cloudTask(void *) {
 
 extern void startBluetooth();
 void setup() {
+  // Complete a confirmed reset before any user state or radios are initialized.
+  {
+    Preferences resetPrefs;
+    if (!resetPrefs.begin("luxio", false)) abort();
+    const bool reset = resetPrefs.getBool("factory-reset", false);
+    resetPrefs.end();
+    if (reset) {
+      // Erase files and crash dumps first. Keep the NVS reset marker until all
+      // other user data is gone; preserve firmware, OTA selection and eFuses.
+      const auto *files = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+      if (!files) abort();
+      ESP_ERROR_CHECK(esp_partition_erase_range(files, 0, files->size));
+      const auto *dump = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, "coredump");
+      if (dump) ESP_ERROR_CHECK(esp_partition_erase_range(dump, 0, dump->size));
+      ESP_ERROR_CHECK(nvs_flash_deinit());
+      ESP_ERROR_CHECK(nvs_flash_erase()); // Settings, Wi-Fi, identity, BLE bonds and Matter fabrics.
+      ESP_ERROR_CHECK(nvs_flash_init());
+    }
+  }
   Serial.begin(115200); // Binary protocol only; diagnostics must never be written here.
 #if ARDUINO_USB_CDC_ON_BOOT
   Serial0.begin(115200); // Also serve boards wired through an external USB/UART bridge.
@@ -1298,7 +1332,7 @@ void setup() {
   prefs.begin("luxio", false);
   if (!LittleFS.begin(true)) abort();
   LittleFS.remove("/startup.pending");
-  state = {}; state.has_config = state.has_color = true;
+  state = {}; state.factory_reset_supported = true; state.has_config = state.has_color = true;
   state.config = {"Luxio", "WS2805", 1, LUXIO_DEFAULT_GPIO, 0}; state.brightness = 16; state.on = true;
   size_t configSize = prefs.getBytesLength("config");
   if (configSize && configSize <= luxio_Config_size) {
@@ -1631,7 +1665,7 @@ void loop() {
       }
     }
     if (wifiPending && !wifiScanning) { wifiPending = false; WiFi.disconnect(); WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str()); }
-    bool restart = rebootPending || (radioRestartAt && int32_t(millis() - radioRestartAt) >= 0);
+    bool restart = rebootPending || (factoryResetPending && int32_t(millis() - factoryResetAt) >= 0) || (radioRestartAt && int32_t(millis() - radioRestartAt) >= 0);
     xSemaphoreGive(stateMutex);
     if (restart) { delay(200); ESP.restart(); }
   }

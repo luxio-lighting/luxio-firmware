@@ -621,3 +621,28 @@ Related pushed commits: iOS `5c3a248` (including the pending action-error toasts
 Android `ccd00b2`, CLI `d22990f`, and Studio `acbbafb`. No API or Setup code changes
 were required. npm publication remains skipped. This publication verification
 did not flash devices or repeat the physical testing documented in the benchmark.
+
+
+## Build 37 factory reset (2026-10-27)
+
+Operation 33 adds an explicitly confirmed factory reset to the shared HTTP, USB
+and BLE dispatcher. State advertises support and the response acknowledges
+acceptance before the scheduled restart. On startup, the reset erases LittleFS,
+crash dumps and NVS before loading settings or starting radios. Application and
+recovery images, OTA selection and eFuses are preserved.
+
+All five main/recovery packages pass chip identity, partition, image-size and
+compiler stack checks. Firmware host/native tests and TypeScript checking pass.
+Production-code extraction tests cover missing confirmation, concurrent restart
+or update checks, marker-write failure, duplicate requests, acknowledgement before
+erasure, partition boundaries and retry after failed storage erasure. Web tests
+exercise successful and failed reset requests over mocked Wi-Fi, USB and BLE.
+No physical device was reset; hardware reset qualification remains outstanding.
+
+| Chip | Main bytes | Recovery bytes |
+| --- | --- | --- |
+| esp32 | 2,300,480 | 1,029,584 |
+| esp32s3 | 2,237,856 | 1,014,736 |
+| esp32c3 | 2,283,936 | 1,085,056 |
+| esp32c5 | 2,491,328 | 1,143,712 |
+| esp32c6 | 2,423,856 | 1,091,104 |

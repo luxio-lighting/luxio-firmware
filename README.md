@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=36 tools/build-firmware.sh all
+LUXIO_BUILD=37 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=36 tools/build-firmware.sh esp32
+LUXIO_BUILD=37 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -329,3 +329,20 @@ are optimized, including dedicated white output for Candle. See the
 Historical Lua implementations in benchmark fixtures are reference workloads,
 not compatibility code in the shipped presets. The signed recovery update flow
 and 4 MB layouts remain the release format for all five chips.
+
+
+## Release build 37
+
+Factory Reset is available over HTTP, Bluetooth and USB using operation 33.
+Clients must send `factory_reset_confirmed=true`; supported devices advertise
+`factory_reset_supported` in State and acknowledge with `factory_reset_accepted`.
+The device schedules a restart after acknowledging the request. Before loading
+user state or starting radios, it erases the user filesystem, crash dumps and NVS
+(settings, Wi-Fi credentials, device identity, Bluetooth bonds and Matter fabrics).
+Firmware, OTA selection and eFuses remain intact. The persistent reset marker is
+erased last with NVS so a failed filesystem erase is retried on the next boot.
+Reconnecting after reset creates a new device identity and requires setup again.
+
+The web app requires confirmation and removes cached connections only after the
+device acknowledges. Older firmware keeps the action disabled. Native mobile
+apps have no Factory Reset control.

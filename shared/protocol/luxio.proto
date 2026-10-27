@@ -5,6 +5,7 @@ option java_multiple_files = true;
 
 enum Operation {
   GET_STATE = 0;
+  FACTORY_RESET = 33; // Requires factory_reset_confirmed; acknowledges before reboot and erasure.
   SET_COLOR = 1;
   SET_BRIGHTNESS = 2;
   SET_CONFIG = 3;
@@ -88,6 +89,7 @@ message Gradient {
 }
 message SavedColor { string id = 1; string name = 2; Color color = 3; }
 message State {
+  bool factory_reset_supported = 18;
   bool matter_disabled = 17; // True when Matter is unavailable in this build or disabled by its RAM check; absent in older Matter-enabled firmware.
   uint32 animation_revision = 16; // Changes whenever an animation starts, including RAM-only replacements.
   repeated Color animation_preview = 15; // Active animation hint, including RAM-only animations.
@@ -107,6 +109,7 @@ message State {
   string script_name = 13; // Display name for the active animation, saved or in-memory.
 }
 message Request {
+  bool factory_reset_confirmed = 18;
   uint32 id = 1;
   Operation operation = 2;
   Color color = 3;
@@ -144,6 +147,7 @@ message NetworkStatus {
   uint32 psram_free = 15;
 }
 message Response {
+  bool factory_reset_accepted = 23;
   uint32 id = 1;
   string error = 2;
   State state = 3;
