@@ -641,8 +641,10 @@ No physical device was reset; hardware reset qualification remains outstanding.
 
 | Chip | Main bytes | Recovery bytes |
 | --- | --- | --- |
-| esp32 | 2,300,480 | 1,029,584 |
-| esp32s3 | 2,237,856 | 1,014,736 |
-| esp32c3 | 2,283,936 | 1,085,056 |
-| esp32c5 | 2,491,328 | 1,143,712 |
-| esp32c6 | 2,423,856 | 1,091,104 |
+| esp32 | 2,300,496 | 1,029,568 |
+| esp32s3 | 2,237,840 | 1,014,720 |
+| esp32c3 | 2,283,920 | 1,085,040 |
+| esp32c5 | 2,491,328 | 1,143,696 |
+| esp32c6 | 2,423,856 | 1,091,072 |
+
+Build 37 was published on channel 0 by [workflow 40523831559](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40523831559), from commit `e2ac385`. The table above records the published packages. Independent checks downloaded all 25 parts and verified sizes, SHA-256 hashes, embedded chip IDs, flash addresses and signed manifests. The HTTP update/download path also passed without redirects. No physical device was flashed or reset during this release.
