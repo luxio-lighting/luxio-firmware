@@ -31,7 +31,10 @@
 #include <soc/gpio_sig_map.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/platform.h>
-#include <mbedtls/sha256.h>
+#include <mbedtls/md.h>
+#if ESP_IDF_VERSION_MAJOR >= 6
+#include <psa/crypto.h>
+#endif
 #include <mbedtls/base64.h>
 #include <cJSON.h>
 #include "luxio.pb.h"
@@ -44,7 +47,7 @@ extern "C" {
 #include "vendor/lua/lualib.h"
 }
 #ifndef LUXIO_BUILD
-#define LUXIO_BUILD 38
+#define LUXIO_BUILD 39
 #endif
 #ifndef LUXIO_CLOUD_URL
 #define LUXIO_CLOUD_URL "http://api.luxio.lighting"
@@ -62,7 +65,11 @@ extern "C" {
 #include <Matter.h>
 #include <platform/CommissionableDataProvider.h>
 #include <platform/DeviceInstanceInfoProvider.h>
+#if __has_include(<setup_payload/OnboardingCodesUtil.h>)
+#include <setup_payload/OnboardingCodesUtil.h>
+#else
 #include <app/server/OnboardingCodesUtil.h>
+#endif
 #include <setup_payload/ManualSetupPayloadGenerator.h>
 #include <setup_payload/QRCodeSetupPayloadGenerator.h>
 #endif
@@ -121,6 +128,8 @@ static volatile bool checkUpdate;
 static bool updateChecking;
 static String updateError;
 
+static const char supportedStripTypes[][8] = {"WS2805", "WS2814", "WS2812", "SK6812", "WS2811", "WS2813", "WS2815"};
+
 static int hardwareRandom(void *, unsigned char *output, size_t length) { esp_fill_random(output, length); return 0; }
 static void stopAnimation() {
   if (animation) lua_close(animation);
@@ -160,7 +169,7 @@ static void render() {
   const bool rgbw = (!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812"));
   const int channels = rgbcct ? 5 : rgbw ? 4 : 3;
 #if LUXIO_INTERNAL_RAM_RADIOS
-  const size_t length = encodeLedSpi(transition->displayed, state.config.led_count, channels, ledBytes, !strcmp(state.config.strip_type, "SK6812"));
+  const size_t length = encodeLedSpi(transition->displayed, state.config.led_count, channels, ledBytes, (channels == 3 && strcmp(state.config.strip_type, "WS2811")) || !strcmp(state.config.strip_type, "SK6812"), !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815"));
   spi_transaction_t transaction = {};
   transaction.length = length * 8;
   transaction.tx_buffer = ledBytes;
@@ -168,8 +177,8 @@ static void render() {
 #else
   size_t position = 0;
   for (uint32_t i = 0; i < state.config.led_count; i++) {
-    // WS2805: R,G,B,W1(warm),W2(cool); WS2814: R,G,B,W; SK6812: G,R,B,W; WS2812: G,R,B.
-    const bool greenFirst = channels == 3 || !strcmp(state.config.strip_type, "SK6812");
+    // WS2805: R,G,B,W1(warm),W2(cool); WS2814: R,G,B,W; SK6812: G,R,B,W; WS2811: R,G,B; WS2812/WS2813/WS2815: G,R,B.
+    const bool greenFirst = (channels == 3 && strcmp(state.config.strip_type, "WS2811")) || !strcmp(state.config.strip_type, "SK6812");
     const int order[5] = {greenFirst ? 1 : 0, greenFirst ? 0 : 1, 2, rgbcct ? 4 : 3, 5};
     for (int c = 0; c < channels; c++) {
       ledBytes[position++] = transition->displayed[i][order[c]];
@@ -268,7 +277,7 @@ static int luaRenderWaves(lua_State *L, int, lua_KContext start) {
       size_t length = lua_rawlen(L, -1);
       if (length > 4) return luaL_error(L, "Use at most four terms per color channel");
       channels[c].count = (int)length;
-      if (((!strcmp(state.config.strip_type, "WS2805") && c == 3) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && c >= 4) || (!strcmp(state.config.strip_type, "WS2812") && c >= 3)) && (length || channels[c].offset != 0))
+      if (((!strcmp(state.config.strip_type, "WS2805") && c == 3) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && c >= 4) || ((!strcmp(state.config.strip_type, "WS2812") || !strcmp(state.config.strip_type, "WS2811") || !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815")) && c >= 3)) && (length || channels[c].offset != 0))
           return luaL_error(L, "Channel unavailable on this strip type");
       for (size_t t = 0; t < length; t++) {
           lua_rawgeti(L, -1, t + 1); luaL_checktype(L, -1, LUA_TTABLE);
@@ -373,7 +382,7 @@ static String startAnimation(luxio_Script &script) {
       if (index < 0 || index >= int(state.config.led_count)) return luaL_error(L, "Pixel index out of range (zero-based)");
       int values[6];
       for (int c = 0; c < 6; c++) { values[c] = luaL_optinteger(L, c + 2, 0); if (values[c] < 0 || values[c] > 255) return luaL_error(L, "Channels must be 0-255"); }
-      if ((!strcmp(state.config.strip_type, "WS2805") && values[3]) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (values[4] || values[5])) || (!strcmp(state.config.strip_type, "WS2812") && (values[3] || values[4] || values[5]))) return luaL_error(L, "Channel unavailable on this strip type");
+      if ((!strcmp(state.config.strip_type, "WS2805") && values[3]) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (values[4] || values[5])) || ((!strcmp(state.config.strip_type, "WS2812") || !strcmp(state.config.strip_type, "WS2811") || !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815")) && (values[3] || values[4] || values[5]))) return luaL_error(L, "Channel unavailable on this strip type");
       for (int c = 0; c < 6; c++) animationPixels[index][c] = values[c];
       return 0;
     }); lua_setglobal(L, "luxio_set_pixel_color");
@@ -393,7 +402,7 @@ static String startAnimation(luxio_Script &script) {
             if (value < 0 || value > 255) return luaL_error(L, "Channels must be 0-255");
             values[c] = (uint8_t)value;
         }
-        if ((!strcmp(state.config.strip_type, "WS2805") && values[3]) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (values[4] || values[5])) || (!strcmp(state.config.strip_type, "WS2812") && (values[3] || values[4] || values[5]))) return luaL_error(L, "Channel unavailable on this strip type");
+        if ((!strcmp(state.config.strip_type, "WS2805") && values[3]) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (values[4] || values[5])) || ((!strcmp(state.config.strip_type, "WS2812") || !strcmp(state.config.strip_type, "WS2811") || !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815")) && (values[3] || values[4] || values[5]))) return luaL_error(L, "Channel unavailable on this strip type");
         for (lua_Integer i = start; i < start + length; i++) memcpy(animationPixels[i], values, 6);
         return 0;
       }, 1);
@@ -630,7 +639,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
     case luxio_Operation_SET_COLOR: {
       auto &c = request->color;
       if (!request->has_color || c.red > 255 || c.green > 255 || c.blue > 255 || c.white > 255 || c.warm_white > 255 || c.cool_white > 255) { error = "Invalid color"; break; }
-      if ((!strcmp(state.config.strip_type, "WS2805") && c.white) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (c.warm_white || c.cool_white)) || (!strcmp(state.config.strip_type, "WS2812") && (c.white || c.warm_white || c.cool_white))) { error = "Channel unavailable on this strip type"; break; }
+      if ((!strcmp(state.config.strip_type, "WS2805") && c.white) || ((!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) && (c.warm_white || c.cool_white)) || ((!strcmp(state.config.strip_type, "WS2812") || !strcmp(state.config.strip_type, "WS2811") || !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815")) && (c.white || c.warm_white || c.cool_white))) { error = "Channel unavailable on this strip type"; break; }
       stopAnimation(); state.color = c; state.on = true; applyColor(); break;
     }
     case luxio_Operation_SET_BRIGHTNESS:
@@ -648,7 +657,9 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!c.has_matter) { c.has_matter = true; c.matter = state.config.matter; }
       if (radioRestartAt) { error = "Radio settings are restarting the device"; break; }
       if (!c.has_relay) { c.has_relay = state.config.has_relay; c.relay = state.config.relay; }
-      if (!request->has_config || !name.length() || c.led_count < 1 || c.led_count > 1024 || c.channel > 100 || (!GPIO_IS_VALID_OUTPUT_GPIO(c.gpio)) || (strcmp(c.strip_type, "WS2805") && strcmp(c.strip_type, "WS2814") && strcmp(c.strip_type, "WS2812") && strcmp(c.strip_type, "SK6812"))) { error = "Invalid strip configuration"; break; }
+      bool supportedStrip = false;
+      for (const auto &type : supportedStripTypes) if (!strcmp(c.strip_type, type)) supportedStrip = true;
+      if (!request->has_config || !name.length() || c.led_count < 1 || c.led_count > 1024 || c.channel > 100 || (!GPIO_IS_VALID_OUTPUT_GPIO(c.gpio)) || !supportedStrip) { error = "Invalid strip configuration"; break; }
       if (c.has_relay && c.relay.enabled && (c.relay.gpio == c.gpio || !GPIO_IS_VALID_OUTPUT_GPIO(c.relay.gpio))) { error = "Relay GPIO must be a separate valid output pin"; break; }
       // Reserve the active serial interfaces and the chip's flash/PSRAM pins.
       const uint32_t pins[] = {c.gpio, c.has_relay && c.relay.enabled ? c.relay.gpio : c.gpio};
@@ -658,6 +669,8 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if ((pin >= 6 && pin <= 11) || (psramFound() && (pin == 16 || pin == 17))) { error = "GPIO is reserved for flash or PSRAM"; break; }
 #elif CONFIG_IDF_TARGET_ESP32S3
       if ((pin >= 26 && pin <= 37) || pin == 19 || pin == 20) { error = "GPIO is reserved for flash, PSRAM, or USB"; break; }
+#elif CONFIG_IDF_TARGET_ESP32S31
+      if (pin == 33 || pin == 34) { error = "GPIO is reserved for USB"; break; }
 #elif CONFIG_IDF_TARGET_ESP32C3
       if (pin >= 12 && pin <= 19) { error = "GPIO is reserved for flash or USB"; break; }
 #elif CONFIG_IDF_TARGET_ESP32C6
@@ -733,10 +746,17 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       }
       const bool radioChanged = c.wifi.enabled != state.config.wifi.enabled || c.matter.enabled != state.config.matter.enabled;
 #if !LUXIO_INTERNAL_RAM_RADIOS
-      if (!strcmp(c.strip_type, "SK6812") != !strcmp(state.config.strip_type, "SK6812")) {
+      if (strcmp(c.strip_type, state.config.strip_type)) {
         rmt_bytes_encoder_config_t encoding = {};
         encoding.bit0 = {.duration0 = 3, .level0 = 1, .duration1 = 9, .level1 = 0};
         encoding.bit1 = {.duration0 = uint16_t(!strcmp(c.strip_type, "SK6812") ? 6 : 8), .level0 = 1, .duration1 = uint16_t(!strcmp(c.strip_type, "SK6812") ? 6 : 4), .level1 = 0};
+        if (!strcmp(c.strip_type, "WS2811")) {
+          encoding.bit0.duration1 = 10;
+          encoding.bit1.duration0 = 6; encoding.bit1.duration1 = 7;
+        } else if (!strcmp(c.strip_type, "WS2813") || !strcmp(c.strip_type, "WS2815")) {
+          encoding.bit0.duration1 = 10;
+          encoding.bit1.duration0 = 9; encoding.bit1.duration1 = 4;
+        }
         encoding.flags.msb_first = 1;
         ESP_ERROR_CHECK(rmt_bytes_encoder_update_config(ledEncoder, &encoding));
       }
@@ -1247,8 +1267,12 @@ static void cloudTask(void *) {
             cJSON_AddItemToArray(payload, cJSON_CreateNumber(snapshot.channel));
             char *canonical = cJSON_PrintUnformatted(payload);
             uint8_t digest[32], signature[80]; size_t signatureLength = 0;
-            mbedtls_sha256(reinterpret_cast<const uint8_t *>(canonical), strlen(canonical), digest, 0);
+            mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), reinterpret_cast<const uint8_t *>(canonical), strlen(canonical), digest);
+#if ESP_IDF_VERSION_MAJOR >= 6
+            int signedOk = mbedtls_pk_sign(&identity, MBEDTLS_MD_SHA256, digest, 32, signature, sizeof(signature), &signatureLength);
+#else
             int signedOk = mbedtls_pk_sign(&identity, MBEDTLS_MD_SHA256, digest, 32, signature, sizeof(signature), &signatureLength, hardwareRandom, nullptr);
+#endif
             free(canonical); cJSON_Delete(payload);
             uint8_t base64[128]; size_t base64Length = 0;
             mbedtls_base64_encode(base64, sizeof(base64), &base64Length, signature, signatureLength); base64[base64Length] = 0;
@@ -1397,6 +1421,8 @@ void setup() {
   if (!restored) startup.reset();
   state.brightness = constrain(state.brightness, 1, 256); state.build = LUXIO_BUILD;
   // Capabilities belong to this firmware, not the pre-update output snapshot.
+  state.supported_strip_types_count = sizeof(supportedStripTypes) / sizeof(supportedStripTypes[0]);
+  for (size_t i = 0; i < state.supported_strip_types_count; ++i) strlcpy(state.supported_strip_types[i], supportedStripTypes[i], sizeof(state.supported_strip_types[i]));
   state.factory_reset_supported = true;
   if (!state.config.has_wifi) { state.config.has_wifi = true; state.config.wifi.enabled = true; }
   if (!state.config.has_matter) { state.config.has_matter = true; state.config.matter.enabled = true; }
@@ -1419,13 +1445,31 @@ void setup() {
   if (psramFound() && state.config.has_relay && (state.config.relay.gpio == 16 || state.config.relay.gpio == 17)) state.config.relay.enabled = false;
 #endif
   state.animation_preview_count = 0; memset(state.animation_preview, 0, sizeof(state.animation_preview));
+#if ESP_IDF_VERSION_MAJOR >= 6
+  if (psa_crypto_init() != PSA_SUCCESS) abort();
+#endif
   mbedtls_pk_init(&identity);
   uint8_t keyBytes[256]; size_t keyLength = prefs.getBytesLength("identity");
   if (keyLength && keyLength <= sizeof(keyBytes)) {
     prefs.getBytes("identity", keyBytes, keyLength);
+#if ESP_IDF_VERSION_MAJOR >= 6
+    if (mbedtls_pk_parse_key(&identity, keyBytes, keyLength, nullptr, 0)) abort();
+#else
     if (mbedtls_pk_parse_key(&identity, keyBytes, keyLength, nullptr, 0, hardwareRandom, nullptr)) abort();
+#endif
   } else {
+#if ESP_IDF_VERSION_MAJOR >= 6
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attributes, 256);
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_EXPORT);
+    psa_set_key_algorithm(&attributes, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+    mbedtls_svc_key_id_t key = 0;
+    if (psa_generate_key(&attributes, &key) != PSA_SUCCESS || mbedtls_pk_copy_from_psa(key, &identity)) abort();
+    psa_destroy_key(key); psa_reset_key_attributes(&attributes);
+#else
     if (mbedtls_pk_setup(&identity, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY)) || mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(identity), hardwareRandom, nullptr)) abort();
+#endif
     int size = mbedtls_pk_write_key_der(&identity, keyBytes, sizeof(keyBytes));
     if (size <= 0 || prefs.putBytes("identity", keyBytes + sizeof(keyBytes) - size, size) != size_t(size)) abort();
   }
@@ -1433,7 +1477,7 @@ void setup() {
   uint8_t pub[128], digest[32], base64[180]; size_t base64Length = 0;
   int pubSize = mbedtls_pk_write_pubkey_der(&identity, pub, sizeof(pub));
   if (pubSize <= 0) abort();
-  mbedtls_sha256(pub + sizeof(pub) - pubSize, pubSize, digest, 0);
+  mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), pub + sizeof(pub) - pubSize, pubSize, digest);
   for (int i = 0; i < 32; i++) sprintf(state.device_id + i * 2, "%02x", digest[i]);
   mbedtls_base64_encode(base64, sizeof(base64), &base64Length, pub + sizeof(pub) - pubSize, pubSize); base64[base64Length] = 0; publicKey = reinterpret_cast<char *>(base64);
   LittleFS.mkdir("/scripts");
@@ -1467,6 +1511,13 @@ void setup() {
   rmt_bytes_encoder_config_t encoding = {};
   encoding.bit0 = {.duration0 = 3, .level0 = 1, .duration1 = 9, .level1 = 0};
   encoding.bit1 = {.duration0 = uint16_t(!strcmp(state.config.strip_type, "SK6812") ? 6 : 8), .level0 = 1, .duration1 = uint16_t(!strcmp(state.config.strip_type, "SK6812") ? 6 : 4), .level1 = 0};
+  if (!strcmp(state.config.strip_type, "WS2811")) {
+    encoding.bit0.duration1 = 10;
+    encoding.bit1.duration0 = 6; encoding.bit1.duration1 = 7;
+  } else if (!strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815")) {
+    encoding.bit0.duration1 = 10;
+    encoding.bit1.duration0 = 9; encoding.bit1.duration1 = 4;
+  }
   encoding.flags.msb_first = 1;
   ESP_ERROR_CHECK(rmt_new_bytes_encoder(&encoding, &ledEncoder));
   ESP_ERROR_CHECK(rmt_enable(ledChannel));
@@ -1693,7 +1744,7 @@ void loop() {
     const size_t encoded = encodeControlResponse(*event, bytes, 0);
     xSemaphoreGive(stateMutex);
     if (encoded) {
-      uint8_t digest[32]; mbedtls_sha256(bytes.get(), encoded, digest, 0);
+      uint8_t digest[32]; mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), bytes.get(), encoded, digest);
       if (memcmp(digest, previousDigest, 32)) {
         // Send on the HTTP task so broadcasts cannot interleave headers and
         // payloads with replies or the server's automatic WebSocket PONGs.

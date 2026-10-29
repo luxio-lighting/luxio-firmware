@@ -5,7 +5,10 @@
 #include <cstdio>
 #include <mbedtls/pk.h>
 #include <mbedtls/base64.h>
-#include <mbedtls/sha256.h>
+#include <mbedtls/md.h>
+#if ESP_IDF_VERSION_MAJOR >= 6
+#include <psa/crypto.h>
+#endif
 #ifndef LUXIO_CLOUD_URL
 #define LUXIO_CLOUD_URL "http://api.luxio.lighting"
 #endif
@@ -19,10 +22,13 @@ inline bool verifySignedUpdate(const UpdateJob &job, uint32_t minimumBuild, uint
   int length = snprintf(payload, sizeof(payload), "luxio-ota-v1\n%s\n%s\n%s\n%lu\n%lu\n%lu\n%s\n",
     job.keyId, CONFIG_IDF_TARGET, job.target, (unsigned long)job.build, (unsigned long)job.channel, (unsigned long)job.size, job.sha256);
   if (length < 0 || size_t(length) >= sizeof(payload)) return false;
+#if ESP_IDF_VERSION_MAJOR >= 6
+  if (psa_crypto_init() != PSA_SUCCESS) return false;
+#endif
   uint8_t digest[32], signature[72]; size_t signatureLength = 0;
   if (mbedtls_base64_decode(signature, sizeof(signature), &signatureLength,
       reinterpret_cast<const uint8_t *>(job.signature), strlen(job.signature)) || signatureLength < 68 ||
-      mbedtls_sha256(reinterpret_cast<const uint8_t *>(payload), length, digest, 0)) return false;
+      mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), reinterpret_cast<const uint8_t *>(payload), length, digest)) return false;
   mbedtls_pk_context key; mbedtls_pk_init(&key);
   int result = mbedtls_pk_parse_public_key(&key, reinterpret_cast<const uint8_t *>(LUXIO_OTA_PUBLIC_KEY), sizeof(LUXIO_OTA_PUBLIC_KEY));
   if (!result) result = mbedtls_pk_verify(&key, MBEDTLS_MD_SHA256, digest, sizeof(digest), signature, signatureLength);

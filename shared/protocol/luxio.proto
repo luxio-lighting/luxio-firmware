@@ -89,6 +89,7 @@ message Gradient {
 }
 message SavedColor { string id = 1; string name = 2; Color color = 3; }
 message State {
+  repeated string supported_strip_types = 19; // Types accepted by this firmware in SET_CONFIG.
   bool factory_reset_supported = 18;
   bool matter_disabled = 17; // True when Matter is unavailable in this build or disabled by its RAM check; absent in older Matter-enabled firmware.
   uint32 animation_revision = 16; // Changes whenever an animation starts, including RAM-only replacements.

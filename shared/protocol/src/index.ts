@@ -14,13 +14,14 @@ export const colorSchema = z.object({
   blue: z.number().int().min(0).max(255).default(0), white: z.number().int().min(0).max(255).default(0),
   warmWhite: z.number().int().min(0).max(255).default(0), coolWhite: z.number().int().min(0).max(255).default(0),
 });
+export const simulatorStripTypes = ["WS2805", "WS2814", "WS2812", "SK6812", "WS2811", "WS2813", "WS2815"];
 export const configSchema = z.object({
-  name: z.string().trim().min(1).max(63), stripType: z.enum(['WS2805', 'WS2814', 'WS2812', 'SK6812']),
-  ledCount: z.number().int().min(1).max(1024), gpio: z.number().int().min(0).max(54),
+  name: z.string().trim().min(1).max(63), stripType: z.string().min(1).max(7),
+  ledCount: z.number().int().min(1).max(1024), gpio: z.number().int().min(0).max(61),
   channel: z.number().int().min(0).max(100),
   wifi: z.object({ enabled: z.boolean() }).nullish(),
   matter: z.object({ enabled: z.boolean() }).nullish(),
-  relay: z.object({ enabled: z.boolean(), gpio: z.number().int().min(0).max(54), inverted: z.boolean() }).nullish(),
+  relay: z.object({ enabled: z.boolean(), gpio: z.number().int().min(0).max(61), inverted: z.boolean() }).nullish(),
 });
 export const parameterSchema = z.object({ name: z.string().min(1).max(32), boolean: z.boolean().default(false), numberInput: z.boolean().optional(), value: z.number().finite(), defaultValue: z.number().default(0), minimum: z.number().default(0), maximum: z.number().default(0) });
 export const scriptSchema = z.object({ preview: z.array(colorSchema).max(8).default([]), id: z.uuid(), name: z.string().trim().min(1).max(63), source: z.string().min(1).max(16384), mode: z.union([z.literal(0), z.literal(2)]).optional().transform(() => 2), parameters: z.array(parameterSchema).max(16).default([]) });
@@ -32,7 +33,7 @@ export type Color = z.infer<typeof colorSchema>;
 export type Config = z.infer<typeof configSchema>;
 export type Script = { preview?: Color[]; id: string; name: string; source: string; mode?: number; parameters?: AnimationParameter[] };
 export interface WifiNetwork { ssid: string; rssi: number; passwordRequired: boolean }
-export interface State { factoryResetSupported?: boolean; matterDisabled?: boolean; animationRevision?: number; animationPreview?: Color[]; deviceId: string; build: number; config: Config; brightness: number; on: boolean; color: Color; activeScriptId: string; lanIp: string; mode?: number; activeGradientId?: string; gradient?: Gradient; activeColorId?: string; scriptName?: string; parameters?: AnimationParameter[] }
+export interface State { supportedStripTypes?: string[]; factoryResetSupported?: boolean; matterDisabled?: boolean; animationRevision?: number; animationPreview?: Color[]; deviceId: string; build: number; config: Config; brightness: number; on: boolean; color: Color; activeScriptId: string; lanIp: string; mode?: number; activeGradientId?: string; gradient?: Gradient; activeColorId?: string; scriptName?: string; parameters?: AnimationParameter[] }
 export interface Request { factoryResetConfirmed?: boolean; id: number; operation: number; color?: Color; brightness?: number; on?: boolean; config?: Config; wifi?: { ssid: string; password: string }; script?: Script; scriptId?: string; scriptOffset?: number; gradient?: Gradient; gradientId?: string; gradientOffset?: number; savedColor?: SavedColor; colorId?: string; colorOffset?: number; parameters?: AnimationParameter[] }
 export interface NetworkStatus { psramSize?: number; psramFree?: number; ssid?: string; gateway?: string; dns?: string[]; connected: boolean; rssi: number; bssid: string; channel: number; powerSave: number; uptimeMs: number; internalFree: number; internalLargestBlock: number; disconnectCount: number; lastDisconnectReason: number }
 export interface Response { factoryResetAccepted?: boolean; animationError?: string; networkStatus?: NetworkStatus; id: number; error: string; state?: State; scripts: Script[]; script?: Script; pairingCode: string; pairingQr: string; availableBuild: number; updateChecking?: boolean; updateError?: string; nextScriptOffset?: number; wifiNetworks?: WifiNetwork[]; wifiScanning?: boolean; wifiScanError?: string; gradients?: Gradient[]; gradient?: Gradient; nextGradientOffset?: number; colors?: SavedColor[]; savedColor?: SavedColor; nextColorOffset?: number }

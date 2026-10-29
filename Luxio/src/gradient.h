@@ -10,7 +10,7 @@ inline bool validGradient(const luxio_Gradient &gradient, const char *strip) {
     const auto &c = gradient.colors[i];
     if (c.red > 255 || c.green > 255 || c.blue > 255 || c.white > 255 || c.warm_white > 255 || c.cool_white > 255) return false;
     if ((!strcmp(strip, "WS2805") && c.white) || ((!strcmp(strip, "WS2814") || !strcmp(strip, "SK6812")) && (c.warm_white || c.cool_white)) ||
-        (!strcmp(strip, "WS2812") && (c.white || c.warm_white || c.cool_white))) return false;
+        ((!strcmp(strip, "WS2812") || !strcmp(strip, "WS2811") || !strcmp(strip, "WS2813") || !strcmp(strip, "WS2815")) && (c.white || c.warm_white || c.cool_white))) return false;
   }
   return true;
 }

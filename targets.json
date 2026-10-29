@@ -28,6 +28,21 @@
     "target": "esp32s3-recovery-v1"
   },
   {
+    "chip": "esp32s31",
+    "imageChipId": 32,
+    "architecture": "riscv",
+    "bootloaderAddress": 8192,
+    "minimumFlashSize": 8388608,
+    "defaultGpio": 4,
+    "fqbn": "esp32:esp32:esp32s31:FlashSize=8M,USBMode=hwcdc,CDCOnBoot=cdc",
+    "recoverySize": 1572864,
+    "applicationAddress": 1638400,
+    "applicationSize": 6422528,
+    "id": "esp32s31",
+    "target": "esp32s31-recovery-v1",
+    "sdk": "s31"
+  },
+  {
     "chip": "esp32c3",
     "imageChipId": 5,
     "architecture": "riscv",

@@ -134,7 +134,7 @@ int main() {
  luxio_Script wrap{};wrap.source=strdup("function loop() for i=1,3000 do local x=i*i end luxio_set_pixel_color(0,99,0,0) end");assert(startAnimation(wrap).empty());
  for(int i=0;i<30 && pixels[0][0]!=99;i++){wallTime+=5;step();assert(animation);}
  assert(pixels[0][0]==99);stopAnimation();free(pixels);
- for(const char *strip: {"WS2812", "WS2814", "WS2805", "SK6812"}) for(unsigned count: {1u, 6u, 1024u}) {
+ for(const char *strip: {"WS2812", "WS2814", "WS2805", "SK6812", "WS2811", "WS2813", "WS2815"}) for(unsigned count: {1u, 6u, 1024u}) {
   state={};state.config.led_count=count;strcpy(state.config.strip_type,strip);
   frameCapacity=count;pixels=static_cast<uint8_t (*)[6]>(calloc(count,6));
   for(unsigned test=0;test<sizeof(bulkCases)/sizeof(*bulkCases);test++) {
@@ -145,7 +145,7 @@ int main() {
     if(test==0){expected[0]=i==count-1?44:11;expected[1]=i==count-1?55:22;expected[2]=i==count-1?66:33;}
     if(test==1){const uint8_t colors[6][3]={{255,0,0},{255,255,0},{0,255,0},{0,255,255},{0,0,255},{255,0,255}};memcpy(expected,colors[i%6],3);}
     if(test==2)expected[0]=expected[1]=expected[2]=127;
-    if(test==3||test==8){if(!strcmp(strip,"WS2805")){expected[4]=180;expected[5]=75;}else if(strcmp(strip,"WS2812"))expected[3]=255;else {expected[0]=255;expected[1]=190;expected[2]=105;}}
+    if(test==3||test==8){if(!strcmp(strip,"WS2805")){expected[4]=180;expected[5]=75;}else if(!strcmp(strip,"WS2814") || !strcmp(strip,"SK6812"))expected[3]=255;else {expected[0]=255;expected[1]=190;expected[2]=105;}}
     if(test==4){const uint8_t colors[6][3]={{0,0,255},{0,255,255},{0,255,0},{255,255,0},{255,0,0},{255,0,255}};memcpy(expected,colors[i%6],3);}
     if(test==5)expected[0]=255;
     if(test==6){expected[0]=127;expected[1]=31;}

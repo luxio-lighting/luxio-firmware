@@ -9,7 +9,7 @@ on:
         description: Firmware build number (increase for each new release)
         type: number
         required: true
-        default: 38
+        default: 39
       publish:
         description: Upload binaries to MongoDB through the API and register updates
         type: boolean
@@ -51,17 +51,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Make room for source SDK container and build
-        if: matrix.chip == 'esp32' || matrix.chip == 'esp32c5' || matrix.chip == 'esp32c6'
+        if: matrix.chip == 'esp32' || matrix.chip == 'esp32s31' || matrix.chip == 'esp32c5' || matrix.chip == 'esp32c6'
         run: |
           # These preinstalled toolchains are unused on this disposable runner.
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
           df -h /
       - uses: arduino/setup-arduino-cli@v2
       - run: tools/bootstrap-firmware.sh
+        if: matrix.chip != 'esp32s31'
+      - name: Install pinned Arduino 4 SDK for ESP32-S31
+        if: matrix.chip == 'esp32s31'
+        run: python3 tools/bootstrap-s31.py
       - uses: actions/setup-node@v4
-        if: matrix.chip == 'esp32'
+        if: matrix.chip == 'esp32' || matrix.chip == 'esp32s31'
         with:
           node-version: 24
+      - name: Test S31 crypto migration, identity persistence and signed OTA
+        if: matrix.chip == 'esp32s31'
+        run: |
+          python3 -m venv .sdk/s31/host-venv
+          .sdk/s31/host-venv/bin/pip install 'jsonschema==4.26.0' 'jinja2==3.1.6'
+          .sdk/s31/host-venv/bin/python tools/test-s31-crypto.py
       - name: Test signed OTA verifier for every chip
         if: matrix.chip == 'esp32'
         run: node tools/test-ota-signatures.mjs

@@ -51,3 +51,5 @@ luxio.Response.gradient type:FT_POINTER
 luxio.Response.state type:FT_POINTER
 luxio.Request descriptorsize:DS_4
 luxio.Response descriptorsize:DS_4
+
+luxio.State.supported_strip_types max_count:16 max_size:8

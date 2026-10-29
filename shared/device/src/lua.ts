@@ -39,7 +39,7 @@ export class Animation {
       if (index < 0 || index >= count) return lauxlib.luaL_error(L, to_luastring('Pixel index out of range (zero-based)'));
       const values = [2, 3, 4, 5, 6, 7].map(position => lauxlib.luaL_optinteger(L, position, 0));
       if (values.some(value => value < 0 || value > 255)) return lauxlib.luaL_error(L, to_luastring('Channels must be integers from 0 to 255'));
-      if ((stripType === 'WS2812' && values.slice(3).some(Boolean)) || ((stripType === 'WS2814' || stripType === 'SK6812') && values.slice(4).some(Boolean)) || (stripType === 'WS2805' && values[3]))
+      if ((['WS2812', 'WS2811', 'WS2813', 'WS2815'].includes(stripType) && values.slice(3).some(Boolean)) || ((stripType === 'WS2814' || stripType === 'SK6812') && values.slice(4).some(Boolean)) || (stripType === 'WS2805' && values[3]))
         return lauxlib.luaL_error(L, to_luastring('Channel unavailable on this strip type'));
       this.pixels[index] = { red: values[0], green: values[1], blue: values[2], white: values[3], warmWhite: values[4], coolWhite: values[5] };
       return 0;
@@ -53,7 +53,7 @@ export class Animation {
           return lauxlib.luaL_error(L, to_luastring('Pixel range out of bounds (zero-based start, count)'));
         const values = [0, 1, 2, 3, 4, 5].map(c => lauxlib.luaL_optinteger(L, c + (ranged ? 3 : 1), 0));
         if (values.some(value => value < 0 || value > 255)) return lauxlib.luaL_error(L, to_luastring('Channels must be 0-255'));
-        if ((stripType === 'WS2812' && values.slice(3).some(Boolean)) || ((stripType === 'WS2814' || stripType === 'SK6812') && values.slice(4).some(Boolean)) || (stripType === 'WS2805' && values[3]))
+        if ((['WS2812', 'WS2811', 'WS2813', 'WS2815'].includes(stripType) && values.slice(3).some(Boolean)) || ((stripType === 'WS2814' || stripType === 'SK6812') && values.slice(4).some(Boolean)) || (stripType === 'WS2805' && values[3]))
           return lauxlib.luaL_error(L, to_luastring('Channel unavailable on this strip type'));
         for (let i = start; i < start + length; i++) Object.assign(this.pixels[i], { red: values[0], green: values[1], blue: values[2], white: values[3], warmWhite: values[4], coolWhite: values[5] });
         return 0;
@@ -125,7 +125,7 @@ export class Animation {
         if (multiply < 0 || multiply > waveCount) return lauxlib.luaL_error(L, to_luastring('Invalid modulation wave index'));
         const length = lua.lua_rawlen(L, -1), terms: number[][] = [];
         if (length > 4) return lauxlib.luaL_error(L, to_luastring('Use at most four terms per color channel'));
-        if (((stripType === 'WS2805' && c === 3) || ((stripType === 'WS2814' || stripType === 'SK6812') && c >= 4) || (stripType === 'WS2812' && c >= 3)) && (length || offset !== 0))
+        if (((stripType === 'WS2805' && c === 3) || ((stripType === 'WS2814' || stripType === 'SK6812') && c >= 4) || (['WS2812', 'WS2811', 'WS2813', 'WS2815'].includes(stripType) && c >= 3)) && (length || offset !== 0))
           return lauxlib.luaL_error(L, to_luastring('Channel unavailable on this strip type'));
         for (let t = 0; t < length; t++) {
           lua.lua_rawgeti(L, -1, t + 1); lauxlib.luaL_checktype(L, -1, lua.LUA_TTABLE);

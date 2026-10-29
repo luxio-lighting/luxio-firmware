@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Animation } from '../shared/device/src/lua.js';
 const cases = JSON.parse(readFileSync(new URL('./fixtures/bulk-api.json', import.meta.url), 'utf8'));
-for (const strip of ['WS2812', 'WS2814', 'WS2805', 'SK6812']) for (const count of [1, 6, 1024]) {
+for (const strip of ['WS2812', 'WS2814', 'WS2805', 'SK6812', 'WS2811', 'WS2813', 'WS2815']) for (const count of [1, 6, 1024]) {
   for (let test = 0; test < cases.length; test++) {
     const animation = new Animation(cases[test].source, count, strip);
     const pixels = animation.tick(33);
@@ -11,7 +11,7 @@ for (const strip of ['WS2812', 'WS2814', 'WS2805', 'SK6812']) for (const count o
       if (test === 0) expected = i === count-1 ? [44,55,66,0,0,0] : [11,22,33,0,0,0];
       if (test === 1) expected = [...[[255,0,0],[255,255,0],[0,255,0],[0,255,255],[0,0,255],[255,0,255]][i%6],0,0,0];
       if (test === 2) expected = [127,127,127,0,0,0];
-      if (test === 3 || test === 8) expected = strip === 'WS2805' ? [0,0,0,0,180,75] : strip === 'WS2812' ? [255,190,105,0,0,0] : [0,0,0,255,0,0];
+      if (test === 3 || test === 8) expected = strip === 'WS2805' ? [0,0,0,0,180,75] : ['WS2812', 'WS2811', 'WS2813', 'WS2815'].includes(strip) ? [255,190,105,0,0,0] : [0,0,0,255,0,0];
       if (test === 4) expected = [...[[0,0,255],[0,255,255],[0,255,0],[255,255,0],[255,0,0],[255,0,255]][i%6],0,0,0];
       if (test === 5) expected = [255,0,0,0,0,0];
       if (test === 6) expected = [127,31,0,0,0,0];

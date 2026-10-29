@@ -8,7 +8,8 @@ start = source.index('  if (!LittleFS.begin(true)) abort();', source.index('void
 load = source[start:source.index('  // Size all three frames', start)]
 cleanup_start = source.index('  prefs.remove("ota-job");', source.index('void setup()'))
 cleanup = source[cleanup_start:source.index('\n}', cleanup_start)]
-fixture = (root / 'tools/test-startup-storage.cpp').read_text().replace('// PRODUCTION_SAVE', save).replace('// PRODUCTION_LOAD', load).replace('// PRODUCTION_FINISH_BOOT', cleanup)
+capabilities = source[source.index('static const char supportedStripTypes'):source.index('static int hardwareRandom')]
+fixture = capabilities + (root / 'tools/test-startup-storage.cpp').read_text().replace('// PRODUCTION_SAVE', save).replace('// PRODUCTION_LOAD', load).replace('// PRODUCTION_FINISH_BOOT', cleanup)
 folder = root / '.sdk/startup-storage'; folder.mkdir(parents=True, exist_ok=True)
 cpp = folder / 'test.cpp'; cpp.write_text(fixture)
 objects = []

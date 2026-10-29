@@ -5,7 +5,7 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 source = (root / 'targets.json').read_bytes()
-for name in ['setup.luxio.lighting', 'api.luxio.lighting']:
+for name in ['setup.luxio.lighting', 'api.luxio.lighting', 'app.luxio.lighting']:
     destination = root.parent / name / 'shared/firmware/targets.json'
     if '--check' in sys.argv:
         assert destination.read_bytes() == source, f'Stale target matrix: {destination}'

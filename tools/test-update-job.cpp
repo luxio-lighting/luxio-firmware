@@ -15,7 +15,7 @@ int main() {
   memset(valid.sha256, 'a', 64); strcpy(valid.target, LUXIO_UPDATE_TARGET);
   strcpy(valid.keyId, "test-release"); memset(valid.signature, 'a', 96);
   assert(validUpdateJob(valid));
-  for (const char *target : {"esp32-recovery-v1", "esp32s3-recovery-v1", "esp32c3-recovery-v1", "esp32c5-recovery-v1", "esp32c6-recovery-v1"}) {
+  for (const char *target : {"esp32-recovery-v1", "esp32s3-recovery-v1", "esp32s31-recovery-v1", "esp32c3-recovery-v1", "esp32c5-recovery-v1", "esp32c6-recovery-v1"}) {
     auto other = valid; strcpy(other.target, target);
     assert(validUpdateJob(other) == (strcmp(target, LUXIO_UPDATE_TARGET) == 0));
   }

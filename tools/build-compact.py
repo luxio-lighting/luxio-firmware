@@ -10,7 +10,7 @@ import sys
 root = Path(__file__).resolve().parent.parent
 hardware = next(t for t in json.loads((root / 'targets.json').read_text()) if t['id'] == sys.argv[1])
 assert hardware['chip'] in ['esp32c5', 'esp32c6']
-build = int(os.environ.get('LUXIO_BUILD', '38'))
+build = int(os.environ.get('LUXIO_BUILD', '39'))
 assert 0 < build <= 2147483647
 destination = root / os.environ.get('LUXIO_BUILD_ROOT', 'build') / hardware['id']
 project = destination / 'sdk'

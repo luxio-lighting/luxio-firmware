@@ -46,8 +46,13 @@ static int rmt_tx_wait_all_done(int, int timeout) { assert(timeout >= 50); txFin
 static void delayMicroseconds(int us) { assert(txFinished && us >= 600); }
 static int rmt_new_bytes_encoder(const rmt_bytes_encoder_config_t *c, int *) {
   assert(c->flags.msb_first);
-  assert(c->bit0.duration0 == 3 && c->bit0.duration1 == 9 && c->bit0.level0 == 1 && c->bit0.level1 == 0);
-  assert(c->bit1.duration0 == (!strcmp(state.config.strip_type, "SK6812") ? 6 : 8) && c->bit1.duration1 == (!strcmp(state.config.strip_type, "SK6812") ? 6 : 4) && c->bit1.level0 == 1 && c->bit1.level1 == 0); return 0;
+  const bool rgbNew = !strcmp(state.config.strip_type, "WS2811") || !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815");
+  const bool backup = !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815");
+  const bool ws2811 = !strcmp(state.config.strip_type, "WS2811");
+  assert(c->bit0.duration0 == 3 && c->bit0.duration1 == (rgbNew ? 10 : 9) && c->bit0.level0 == 1 && c->bit0.level1 == 0);
+  assert(c->bit1.duration0 == (backup ? 9 : ws2811 || !strcmp(state.config.strip_type, "SK6812") ? 6 : 8));
+  assert(c->bit1.duration1 == (ws2811 ? 7 : !strcmp(state.config.strip_type, "SK6812") ? 6 : 4));
+  assert(c->bit1.level0 == 1 && c->bit1.level1 == 0); return 0;
 }
 static int ledSpi;
 struct spi_transaction_t { size_t length; const void *tx_buffer; };
@@ -61,8 +66,9 @@ static int spi_device_transmit(int, const spi_transaction_t *transaction) {
     uint8_t value = 0;
     for (int bit = 0; bit < 8; bit++) {
       const unsigned symbol = (bytes[i * 4 + bit / 2] >> (bit % 2 == 0 ? 4 : 0)) & 15;
-      assert(symbol == 8 || symbol == 12);
-      value = uint8_t((value << 1) | (symbol == 12));
+      const unsigned one = !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815") ? 14 : 12;
+      assert(symbol == 8 || symbol == one);
+      value = uint8_t((value << 1) | (symbol == one));
     }
     transmitted.push_back(value);
   }
@@ -131,15 +137,15 @@ int main() {
     for (uint32_t i = 0; i < count; i++) for (int c = 0; c < 6; c++) pixels[i][c] = (i + c + 1) % 256;
     state.on = true; state.brightness = 256; state.config.led_count = count;
     state.config.has_relay = true; state.config.relay.enabled = true; state.config.relay.gpio = 18;
-    for (auto strip : {"WS2805", "WS2814", "WS2812", "SK6812"}) {
+    for (auto strip : {"WS2805", "WS2814", "WS2812", "SK6812", "WS2811", "WS2813", "WS2815"}) {
       strcpy(state.config.strip_type, strip);
       // PRODUCTION_ENCODING
       render();
       int channels = !strcmp(strip, "WS2805") ? 5 : (!strcmp(strip, "WS2814") || !strcmp(strip, "SK6812")) ? 4 : 3;
       assert(transmitted.size() == count * channels && pinLevel == HIGH);
       for (uint32_t i = 0; i < count; i++) {
-        assert(transmitted[i * channels] == pixels[i][channels == 3 || !strcmp(strip, "SK6812") ? 1 : 0]);
-        assert(transmitted[i * channels + 1] == pixels[i][channels == 3 || !strcmp(strip, "SK6812") ? 0 : 1]);
+        assert(transmitted[i * channels] == pixels[i][(channels == 3 && strcmp(strip, "WS2811")) || !strcmp(strip, "SK6812") ? 1 : 0]);
+        assert(transmitted[i * channels + 1] == pixels[i][(channels == 3 && strcmp(strip, "WS2811")) || !strcmp(strip, "SK6812") ? 0 : 1]);
         assert(transmitted[i * channels + 2] == pixels[i][2]);
         if (channels == 4) assert(transmitted[i * channels + 3] == pixels[i][3]);
         if (channels == 5) assert(transmitted[i * channels + 3] == pixels[i][4] && transmitted[i * channels + 4] == pixels[i][5]);

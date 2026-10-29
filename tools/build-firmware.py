@@ -15,7 +15,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('chip', nargs='?', default='esp32s3', choices=['all'] + [t['id'] for t in matrix])
 args = parser.parse_args()
 cli = os.environ.get('ARDUINO_CLI') or shutil.which('arduino-cli') or '/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli'
-assert (root / '.sdk/arduino-cli.yaml').exists(), 'Run tools/bootstrap-firmware.sh first'
 ctags = root / '.sdk/ctags'
 ctags.mkdir(parents=True, exist_ok=True)
 (ctags / 'ctags').write_text('#!/bin/sh\nexit 0\n')
@@ -33,11 +32,14 @@ for target in matrix:
     directory.mkdir(parents=True, exist_ok=True)
     # A failed rebuild must never leave an apparently current release behind.
     shutil.rmtree(directory / 'release', ignore_errors=True)
-    build = os.environ.get('LUXIO_BUILD', '38')
+    build = os.environ.get('LUXIO_BUILD', '39')
     assert build.isdigit() and 0 < int(build) <= 2147483647, 'Invalid LUXIO_BUILD'
     print(f'Building {chip} ({target["architecture"]}), build {build}', flush=True)
     try:
-        sdk = root / '.sdk/arduino/packages/esp32/tools/esp32-arduino-libs/idf-release_v5.5-f1a1df9b-v3' / chip
+        sdk_base = root / ('.sdk/s31' if chip == 'esp32s31' else '.sdk')
+        assert (sdk_base / 'arduino-cli.yaml').exists(), f'Run tools/bootstrap-{"s31.py" if chip == "esp32s31" else "firmware.sh"} first'
+        sdk_version = 'idf-release_v6.1-9a97f6c5-v2' if chip == 'esp32s31' else 'idf-release_v5.5-f1a1df9b-v3'
+        sdk = sdk_base / 'arduino/packages/esp32/tools/esp32-arduino-libs' / sdk_version / chip
         for sketch, folder, capacity in [('Luxio', 'main', target['applicationSize']), ('Recovery', 'recovery', target['recoverySize'])]:
             source = directory / 'sources' / sketch
             shutil.rmtree(source, ignore_errors=True)
@@ -60,7 +62,7 @@ for target in matrix:
                 assert library.exists() and 'version=2.5.1' in library.read_text(), 'Run tools/bootstrap-firmware.sh to install NimBLE-Arduino 2.5.1'
                 flags += ' -DCONFIG_BT_NIMBLE_SM_SC=1 -DCONFIG_BT_NIMBLE_ROLE_CENTRAL=0 -DCONFIG_BT_NIMBLE_ROLE_OBSERVER=0 -DCONFIG_BT_NIMBLE_MAX_CONNECTIONS=1'
             cpp = flags + f' -DLUXIO_BUILD={build} -DLUXIO_APP_CAPACITY={target["applicationSize"]} -DLUXIO_APP_OFFSET={target["applicationAddress"]} -DLUXIO_LOADER_CAPACITY={target["recoverySize"]} -DLUXIO_DEFAULT_GPIO={target["defaultGpio"]} -DLUXIO_UPDATE_LAYOUT="{target["target"]}" -DLUXIO_MATTER={matter} -DLUXIO_CLOUD_URL="{os.environ.get("LUXIO_CLOUD_URL", "http://api.luxio.lighting")}"'
-            command = [cli, '--config-file', str(root / '.sdk/arduino-cli.yaml'), 'compile',
+            command = [cli, '--config-file', str(sdk_base / 'arduino-cli.yaml'), 'compile',
                        '--fqbn', target['fqbn'], '--jobs', os.environ.get('LUXIO_JOBS', '2'),
                        '--build-path', str(directory / folder)]
             if sketch == 'Luxio' and matter == '1':
@@ -71,9 +73,8 @@ for target in matrix:
                 # The pinned SDK has no API to relinquish its BLE host without
                 # releasing controller RAM. Replace its lifecycle entry points
                 # with matter_network_only.cpp, retaining the original class ABI.
-                sdk = root / '.sdk/arduino/packages/esp32/tools/esp32-arduino-libs/idf-release_v5.5-f1a1df9b-v3' / chip
                 prefix = 'xtensa-esp-elf' if target['architecture'] == 'xtensa' else 'riscv32-esp-elf'
-                binaries = list((root / '.sdk/arduino/packages/esp32/tools').glob(f'*/2507/bin/{prefix}-objcopy'))
+                binaries = list((sdk_base / 'arduino/packages/esp32/tools').glob(f'*/{"esp-15.2.0_20251204" if chip == "esp32s31" else "2507"}/bin/{prefix}-objcopy'))
                 assert len(binaries) == 1, 'Pinned ESP32 toolchain is required'
                 objcopy = binaries[0]
                 nm = objcopy.with_name(prefix + '-nm')
@@ -91,6 +92,9 @@ for target in matrix:
                 libs = libs.replace('-lespressif__esp_matter', str(archive))
             link_libraries = directory / f'{folder}-libs'
             link_libraries.write_text(libs)
+            if chip == 'esp32s31':
+                for tool, version in [('esp32-arduino-libs', sdk_version), ('riscv32-esp-elf-gcc', 'esp-15.2.0_20251204'), ('esptool_py', '5.3.1')]:
+                    command += ['--build-property', f'tools.{tool}.path={sdk_base}/arduino/packages/esp32/tools/{tool}/{version}']
             command += ['--build-property', f'compiler.c.elf.libs=@{link_libraries}']
             for prop in [f'upload.maximum_size={capacity}', f'runtime.tools.ctags.path={ctags}',
                          f'tools.ctags.path={ctags}', f'compiler.c.extra_flags={flags}', f'compiler.cpp.extra_flags={cpp}']:

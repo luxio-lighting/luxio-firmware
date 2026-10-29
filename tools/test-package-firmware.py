@@ -19,8 +19,8 @@ with tempfile.TemporaryDirectory(prefix='package-test-', dir=root / '.sdk') as d
     shutil.copy(root / 'targets.json', fixture / 'targets.json')
     shutil.copy(root / 'tools/package-firmware.py', fixture / 'tools/package-firmware.py')
     for target in matrix:
-        assert target['minimumFlashSize'] == 0x400000, 'Every supported board must fit 4 MB flash'
-        assert target['applicationAddress'] + target['applicationSize'] == 0x3b0000
+        assert target['minimumFlashSize'] == (0x800000 if target['chip'] == 'esp32s31' else 0x400000)
+        assert target['applicationAddress'] + target['applicationSize'] == target['minimumFlashSize'] - 0x50000
         chip = target['chip']
         build = fixture / 'build' / target['id']
         (build / 'main').mkdir(parents=True)

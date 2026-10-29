@@ -8,7 +8,10 @@
 #include <esp_ota_ops.h>
 #include <esp_app_format.h>
 #include <esp_image_format.h>
-#include <mbedtls/sha256.h>
+#include <mbedtls/md.h>
+#if ESP_IDF_VERSION_MAJOR >= 6
+#include <psa/crypto.h>
+#endif
 #include <cJSON.h>
 #include "signed_update.h"
 
@@ -104,9 +107,10 @@ void setup() {
         else if (esp_ota_begin(application, OTA_WITH_SEQUENTIAL_WRITES, &handle) != ESP_OK) error = "Unable to begin application write";
         else {
           opened = true;
-          mbedtls_sha256_context hash; mbedtls_sha256_init(&hash); mbedtls_sha256_starts(&hash, 0);
+          mbedtls_md_context_t hash; mbedtls_md_init(&hash);
+          if (mbedtls_md_setup(&hash, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0) || mbedtls_md_starts(&hash)) abort();
           if (esp_ota_write(handle, buffer, prefix) != ESP_OK) error = "Flash write failed";
-          else { mbedtls_sha256_update(&hash, buffer, prefix); total = prefix; }
+          else { mbedtls_md_update(&hash, buffer, prefix); total = prefix; }
           uint32_t lastData = millis();
           while (!error.length() && total < current.size) {
             int count = stream->readBytes(buffer, min(sizeof(buffer), size_t(current.size - total)));
@@ -116,11 +120,11 @@ void setup() {
             }
             lastData = millis();
             if (esp_ota_write(handle, buffer, count) != ESP_OK) { error = "Flash write failed"; break; }
-            mbedtls_sha256_update(&hash, buffer, count); total += count;
+            mbedtls_md_update(&hash, buffer, count); total += count;
             xSemaphoreTake(mutex, portMAX_DELAY); received = total; xSemaphoreGive(mutex);
             vTaskDelay(1);
           }
-          uint8_t digest[32]; char actual[65]; mbedtls_sha256_finish(&hash, digest); mbedtls_sha256_free(&hash);
+          uint8_t digest[32]; char actual[65]; mbedtls_md_finish(&hash, digest); mbedtls_md_free(&hash);
           for (int i = 0; i < 32; i++) sprintf(actual + 2 * i, "%02x", digest[i]);
           if (!error.length() && strcmp(actual, current.sha256)) error = "Firmware checksum mismatch. Submit a correct update or retry.";
           if (!error.length()) {

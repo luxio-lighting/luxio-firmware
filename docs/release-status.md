@@ -685,3 +685,25 @@ Build 38 was published on channel 0 by [workflow 40533741490](https://github.com
 | esp32c3 | 2,284,672 | `54db9bab0cf7508bc7368abf27e57f6bbba8852b041d39393c94cf193904d305` |
 | esp32c5 | 2,492,080 | `9b4f992712f731578e43382deff6b46de2ed0e649c5dd8ed65b1dd232a1ccf0f` |
 | esp32c6 | 2,424,608 | `513de77c42225aed0716965ac350238cc955f8bb4cb70acaabbce88337f48114` |
+
+
+## ESP32-S31 (2026-10-29)
+
+Build 39 now compiles an S31 application (3,057,280 bytes) and recovery loader
+(1,149,040 bytes) using pinned Arduino 4 / ESP-IDF 6.1. The package requires 8 MB
+flash, with loader at 0x10000 (0x180000 bytes), application at 0x190000
+(0x620000 bytes), filesystem at 0x7b0000 and core dump at 0x7f0000. The bootloader
+starts at 0x2000; image chip ID is 32. All five flash parts pass package checks.
+The control stack budget is 2,000 / 4,096 bytes; cloud task frame is 1,520 bytes.
+The existing ESP32-S3 build also passes after shared crypto changes.
+
+Firmware regression, packaging, update-layout and both MbedTLS 3/4 signature
+checks pass. The actual S31 identity-generation code is host-tested for stable
+DER persistence and signing. Web flasher tests verify security-info detection
+rather than the ambiguous P4 magic register, S31 SPI flash capacity detection,
+8 MB enforcement and USB reconnect. API tests include S31-specific manifests.
+
+This is a development-SDK preview, not hardware qualification. No S31 board
+was connected, no device was flashed, and no new binaries were published. The
+website lists S31 with an 8 MB minimum. The web app and standalone
+Setup can flash it once a matching signed public release has been published.

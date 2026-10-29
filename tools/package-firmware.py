@@ -12,7 +12,7 @@ root = Path(__file__).resolve().parent.parent
 matrix = json.loads((root / 'targets.json').read_text())
 identifier = sys.argv[1] if len(sys.argv) > 1 else 'esp32s3'
 target = next(t for t in matrix if t['id'] == identifier)
-assert target['minimumFlashSize'] == 0x400000, 'Every firmware package must fit 4 MB flash'
+assert target['minimumFlashSize'] in [0x400000, 0x800000], 'Unsupported flash size'
 chip = target['chip']
 directory = root / os.environ.get('LUXIO_BUILD_ROOT', 'build') / target['id']
 app = directory / 'main/Luxio.ino.bin'
@@ -35,7 +35,7 @@ for offset in range(0, len(partitions) - 31, 32):
     magic, kind, subtype, address, size, label, flags = struct.unpack_from('<HBBII16sI', partitions, offset)
     if magic != 0x50aa:
         break
-    assert address + size <= 0x400000, 'Partition exceeds 4 MB flash'
+    assert address + size <= target['minimumFlashSize'], 'Partition exceeds target flash'
     if kind == 0:
         applications.append((subtype, address, size, label.rstrip(b'\0')))
 assert applications == [(0, 0x10000, target['recoverySize'], b'loader'), (0x10, target['applicationAddress'], target['applicationSize'], b'app0')], 'Only the fixed recovery loader and single main application layout can be packaged'

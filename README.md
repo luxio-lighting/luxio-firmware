@@ -29,7 +29,7 @@ Initial installation requires USB flashing of the bootloader, partition table, e
 
 The recovery web page is at the device's LAN IP while updating, with `/status`, `POST /retry` and `POST /update`. A replacement update requires `url` (HTTPS), `sha256`, `size`, `build`, and `target: "<chip>-recovery-v1"`. It validates the target, image size, chip, Luxio app descriptor/build, SHA-256 and ESP image checksum before boot selection. Failed transfers stay in recovery for manual retry. The bootloader's pending-image rollback returns to recovery if the new application resets before confirming startup; there is no previous full application to restore.
 
-Matter uses Wi-Fi/IP; Luxio exclusively owns Bluetooth for discovery, setup and control on all five targets. From build 35, original ESP32 releases use the tested source-built DMA/Matter/BLE profile. Hardware qualification and remaining peak-memory limits are recorded in [release status](docs/release-status.md) and [the low-RAM profile](docs/lowram-esp32.md).
+Matter uses Wi-Fi/IP; Luxio exclusively owns Bluetooth for discovery, setup and control on all six targets. From build 35, original ESP32 releases use the tested source-built DMA/Matter/BLE profile. Hardware qualification and remaining peak-memory limits are recorded in [release status](docs/release-status.md) and [the low-RAM profile](docs/lowram-esp32.md).
 
 
 ## Matter memory policy
@@ -61,17 +61,18 @@ GLEDOPTO reports no usable PSRAM and retains data GPIO16 and relay GPIO18.
 
 ## Target matrix
 
-`targets.json` is the source of truth for local builds and the CI matrix. Run `python3 tools/sync-targets.py` to refresh the committed snapshots in sibling Setup and API repositories, or add `--check` to check drift. Each repository builds independently from its committed files.
+`targets.json` is the source of truth for local builds and the CI matrix. Run `python3 tools/sync-targets.py` to refresh the committed snapshots in sibling web app, Setup and API repositories, or add `--check` to check drift. Each repository builds independently from its committed files.
 
 | Target | CPU | Minimum flash | Bootloader | Main application | Recovery capacity | App capacity | Initial LED GPIO |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | esp32 | Xtensa | 4 MB | 0x1000 | 0x130000 | 1.125 MiB | 2.5 MiB | 16 |
 | esp32s3 | Xtensa | 4 MB | 0x0 | 0x130000 | 1.125 MiB | 2.5 MiB | 16 |
+| esp32s31 | RISC-V | 8 MB | 0x2000 | 0x190000 | 1.5 MiB | 6.125 MiB | 4 |
 | esp32c3 | RISC-V | 4 MB | 0x0 | 0x150000 | 1.25 MiB | 2.375 MiB | 4 |
 | esp32c5 | RISC-V | 4 MB | 0x2000 | 0x130000 | 1.125 MiB | 2.5 MiB | 4 |
 | esp32c6 | RISC-V | 4 MB | 0x0 | 0x130000 | 1.125 MiB | 2.5 MiB | 4 |
 
-All profiles use DIO flash and fit the complete installation—including recovery, settings, filesystem and core dump—within 4 MB. C5/C6 build ESP-IDF 5.5, Arduino 3.3.3 and Matter 1.4.1 from pinned sources in Docker, omitting Thread while retaining Matter over Wi-Fi and encrypted Luxio BLE. Build them with `python3 tools/build-firmware.py esp32c5` or `esp32c6` after SDK bootstrap; Docker must be available. C3 uses a larger recovery slot and a slightly smaller application slot. Each chip has one `<chip>-recovery-v1` target. No legacy 8 MB layout or migration path is maintained. The build stages independent source/partition copies under `build/<id>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
+The existing ESP32/S3/C3/C5/C6 profiles fit the complete installation—including recovery, settings, filesystem and core dump—within 4 MB. ESP32-S31 requires 8 MB. C5/C6 build ESP-IDF 5.5, Arduino 3.3.3 and Matter 1.4.1 from pinned sources in Docker, omitting Thread while retaining Matter over Wi-Fi and encrypted Luxio BLE. Build them with `python3 tools/build-firmware.py esp32c5` or `esp32c6` after SDK bootstrap; Docker must be available. C3 uses a larger recovery slot and a slightly smaller application slot. Each chip has one `<chip>-recovery-v1` target. No legacy 8 MB layout or migration path is maintained. The build stages independent source/partition copies under `build/<id>/sources/`; it never changes another target's partition table. The checked-in sketch partition CSVs remain the ESP32/S3 reference layout.
 
 The 256 KiB filesystem and 64 KiB core-dump partition occupy the final 320 KiB of each profile's minimum flash size. Larger physical flash chips can use these images; smaller ones are rejected by Setup. ESP32, S3 and C5 probe PSRAM at startup. S3 uses QSPI PSRAM (including the Lolin S3 Mini); OPI PSRAM is not enabled by this profile. Basic lighting and updates do not require PSRAM. All three LED frames are allocated for the configured strip length and grow when it increases; configuration is rejected if allocation fails. A smaller count releases the excess capacity on reboot. The exact LED capacity, Matter heap headroom, USB reset behavior and board wiring still require hardware qualification. Default pins are starting values, not automatic board identification.
 
@@ -200,7 +201,7 @@ Preset catalogs belong to the mobile apps and Studio. Firmware accepts client-su
 
 ## Luxio Bluetooth with Matter over Wi-Fi
 
-All five release targets expose the Luxio service
+All six build targets expose the Luxio service
 `e97b1000-3c27-4a20-9df4-7d025bc7e451`, including before Wi-Fi is configured.
 RX `1001` accepts writes with response and requires encryption; TX `1002` sends
 notifications. Subscribe first, then send an LXP1-framed Protobuf request in
@@ -356,3 +357,52 @@ Luxio prefix remain discoverable. Names longer than the 29-byte scan-response
 limit are shortened at a UTF-8 character boundary; the full name remains in
 settings and the control API. This build also restores firmware capability flags
 after loading pre-update lighting state.
+
+## Supported LED strips
+
+The firmware reports `State.supported_strip_types` (field 19) with its state over HTTP, WebSocket, USB and Bluetooth. Settings clients use this list, not a fixed menu. If an older device omits it, clients retain only the configured type until its firmware is updated. Simulators report their own supported list.
+
+| Type | Channels / wire order | Signalling |
+| --- | --- | --- |
+| WS2805 | RGBCCT / RGB warm cool | Existing five-channel profile |
+| WS2814 | RGBW / RGBW | Existing four-channel profile |
+| SK6812 | RGBW / GRBW | Existing four-channel profile |
+| WS2812 (including WS2812B) | RGB / GRB | Existing RGB profile |
+| WS2811 | RGB / RGB | 800 kHz family; older 400 kHz variants are not supported |
+| WS2813 | RGB / GRB | Backup-data strip, reset low at least 600 µs |
+| WS2815 | RGB / GRB | Backup-data strip, reset low at least 600 µs |
+
+For grouped strips such as common 12 V WS2811 strips, LED Count means addressable controllers/groups, not individual emitters. Follow the strip manufacturer's voltage and backup-data wiring instructions. WS2811/WS2813/WS2815 have encoder and protocol coverage; physical qualification requires those strips.
+
+
+### ESP32-S31
+
+Run `python3 tools/bootstrap-s31.py`, then `python3 tools/build-firmware.py esp32s31`.
+Use Python 3.11 or newer for bootstrap. The isolated `.sdk/s31/` installation pins
+Arduino 4 commit `d1ae6ac9498601920b21f7f03b11e56ba3cf30d7` and IDF 6.1 libraries
+`idf-release_v6.1-9a97f6c5-v2`; downloads are SHA-256 checked. Stable targets keep
+Arduino 3.3.3. CI builds the application and recovery and checks both image IDs,
+partition capacities and stack budgets. The target is RISC-V, image chip ID 32;
+it must never use an ESP32-S3 or ESP32-P4 image.
+
+S31 requires at least 8 MB flash and defaults to GPIO4. GPIO33/34 are reserved for
+USB Serial/JTAG and GPIO58/59 for UART. Chip validity checks reject nonexistent
+GPIO29/41. Its flash and in-package PSRAM use dedicated pins. Clients permit
+GPIO0–61, while firmware applies the actual chip's pin restrictions.
+
+The application includes Matter over Wi-Fi, Luxio BLE and the same signed manual
+recovery update flow. ESP-IDF 6 uses PSA key generation and MbedTLS 4's signing
+API; cloud identity remains DER P-256 and signed updates retain their existing
+format. The browser uses esptool-js 0.7.0 to identify S31 using GET_SECURITY_INFO,
+checks the 8 MB minimum and verifies image chip IDs and SHA-256 before writing.
+No public image is available until a successful package is explicitly published.
+Hardware qualification is still required; this is development-SDK support.
+
+
+S31 validation: the application is 3,057,280 bytes and recovery is 1,149,040
+bytes in build 39. Both pass chip-ID, partition-size and stack checks. Host tests
+against the pinned MbedTLS 4 sources verify Node-generated OTA signatures,
+tamper rejection, PSA identity generation, DER save/reload and signing.
+Run `tools/test-s31-crypto.py` with CMake, Node, Jinja2 3.1.6 and jsonschema 4.26.0
+installed; CI runs this test for S31. Hardware accelerators, radios, boot and
+physical flashing still require testing on an S31 board.
