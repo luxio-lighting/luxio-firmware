@@ -395,7 +395,7 @@ recovery update flow. ESP-IDF 6 uses PSA key generation and MbedTLS 4's signing
 API; cloud identity remains DER P-256 and signed updates retain their existing
 format. The browser uses esptool-js 0.7.0 to identify S31 using GET_SECURITY_INFO,
 checks the 8 MB minimum and verifies image chip IDs and SHA-256 before writing.
-No public image is available until a successful package is explicitly published.
+Build 39 is published on channel 0 and available through the web flasher and manual firmware updates.
 Hardware qualification is still required; this is development-SDK support.
 
 

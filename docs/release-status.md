@@ -707,3 +707,29 @@ This is a development-SDK preview, not hardware qualification. No S31 board
 was connected, no device was flashed, and no new binaries were published. The
 website lists S31 with an 8 MB minimum. The web app and standalone
 Setup can flash it once a matching signed public release has been published.
+
+## Build 39 publication (2026-10-29)
+
+Published all six targets on channel 0 from commit `16b258f9791bed86a8a16fdc6a96fcb3877bf1ab`.
+[GitHub Actions run 40902544170](https://github.com/luxio-lighting/luxio-firmware/actions/runs/40902544170) passed every build, crypto check and publication step.
+
+Independent downloads verified all six ECDSA signatures and all thirty flash
+parts: SHA-256, size, image chip ID, application build number and flash bounds.
+HTTP device endpoints returned the same artifacts without redirects. S31 requires
+8 MB; the other five targets require 4 MB. This verifies publication, not physical
+S31 hardware operation. No device was flashed during publication.
+
+| Chip | Application bytes | SHA-256 |
+| --- | ---: | --- |
+| esp32 | 2,301,648 | `d357adf898d127ae7d5c962dced6b49612144d78e82b46d4b6590c9c2b7fc586` |
+| esp32s3 | 2,239,168 | `96b472922fc6bf117cbf790701d7d4d9fd82185f1b0685d8de55a5f88259b413` |
+| esp32s31 | 3,057,264 | `671a40159f1a52b6004e8e654a5660ee8cd467474cd0613e35dd0ba8904fe3cc` |
+| esp32c3 | 2,285,504 | `3968db12ace97633aa9e03bdfa62157db1ed3364e6965d4fa8486b6ca4e9876f` |
+| esp32c5 | 2,492,896 | `86aee0ac6c7b66b554f2e4fd49aeb0f76c36f81f533c0d4fa86a2947e05af62a` |
+| esp32c6 | 2,425,424 | `3a57bd78fe618ddfc56a0fb0c7bc010ef29725942e5f10c0acf1c2a57358cdfd` |
+
+The API accepts the S31 recovery target. The current web app deployment includes
+S31 USB flashing and device-reported LED types; the marketing website lists
+ESP32-S31 (8 MB+) without a preview label. WS2811, WS2813 and WS2815 support is
+included in this release. Native client and CLI source changes are pushed; this
+publication did not submit new mobile store builds.
