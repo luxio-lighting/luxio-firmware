@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=38 tools/build-firmware.sh all
+LUXIO_BUILD=44 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=38 tools/build-firmware.sh esp32
+LUXIO_BUILD=44 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -84,7 +84,7 @@ To prepare publishable manifests after building, set `LUXIO_FIRMWARE_BASE_URL` t
 
 Builds default to channel 100 in their manifests. Public channel 0 publication remains a separate release decision and hardware qualification is not implied by compilation. No command in the matrix build flashes a device, uploads files or registers an OTA update.
 
-The **Firmware** GitHub workflow now has explicit manual inputs for `build`, `publish` and `channel`. On `main`, selecting `publish=true` uploads all five successful build packages through the API into MongoDB, verifies the public downloads, and registers the releases. Set `UPDATE_PUBLISH_TOKEN` in repository Actions secrets to the API's configured token. Select channel `0` to make a build available to Setup; `100` is the default development channel. Use a new increasing build number for changed binaries; identical publication retries are safe. Pull requests never publish, and automatic tagged releases retain their qualification gate. Manual publication does not imply hardware qualification.
+The **Firmware** GitHub workflow now has explicit manual inputs for `build`, `publish` and `channel`. On `main`, selecting `publish=true` uploads all six successful build packages through the API into MongoDB, verifies the public downloads, and registers the releases. Set `UPDATE_PUBLISH_TOKEN` in repository Actions secrets to the API's configured token. Select channel `0` to make a build available to Setup; `100` is the default development channel. Use a new increasing build number for changed binaries; identical publication retries are safe. Pull requests never publish, and automatic tagged releases retain their qualification gate. Manual publication does not imply hardware qualification.
 
 For the same operation locally, run `LUXIO_CHANNEL=0 node tools/publish-update.mjs build/<chip>/release/manifest.local.json --upload` with `UPDATE_PUBLISH_TOKEN` and `OTA_SIGNING_KEY` set. The upload endpoint uses immutable SHA-256 URLs at `https://api.luxio.lighting/firmware/<sha256>`; no external binary host is needed. `LUXIO_API_URL` overrides the HTTPS API origin. All local files are validated before the first upload, and all downloads are validated before metadata registration.
 
@@ -111,7 +111,54 @@ Build 13 stores colors, native gradients, and compressed Lua animations in separ
 
 ## LED output memory
 
-Original ESP32 releases from build 35 use DMA output; see [the profile record](docs/lowram-esp32.md) for its buffer accounting. The following build-29 RMT accounting applies to the other targets.
+Original ESP32 releases from build 35 use DMA output; see [the profile record](docs/lowram-esp32.md) for its buffer accounting. Build 44 extends the same full-frame SPI DMA output to ESP32-S3 to address flicker reported on LX0001 with build 39. This changes only the LED backend; S3 retains its existing radio and frame-memory configuration.
+
+Local test build 40 compiled and was flashed over USB to two 4MB LX0001 boards on
+2026-11-23. All flash hashes verified. The first board answered ten consecutive
+USB state requests, and the user confirmed that flicker disappeared with 104
+WS2805 groups. The second board uses a USB-powered 5V SK6812 strip; visual
+confirmation on that strip is still pending. No hardware modifications were
+needed for the WS2805 result. The build has not been published.
+
+Build 44 also allocates a 2,048-byte receive queue before
+starting ESP32-S3 hardware USB CDC. This adds 1,792 bytes over Arduino's default
+queue, allowing USB animation data to arrive while LED output blocks the main
+loop. Larger uploads still need host pacing; the web client sends 128-byte chunks
+with 40ms gaps. The 16 KiB animation-source limit is a protocol ceiling, not a
+guarantee that a board without PSRAM has enough free memory to load that size.
+
+It also includes Espressif's [HWCDC TX backport](tools/patches/README.md). On the
+unpatched driver, an animation request could succeed while its acknowledgement
+was truncated: one captured reply declared 384 payload bytes but delivered only
+256. Reconnecting and reading the active animation confirmed the request had
+already been applied. Increasing RX buffering alone did not fix this reply loss.
+
+On boards without PSRAM, the new animation VM also collects compiler temporaries
+immediately after compilation, before any user code runs. This returns memory
+that subsequent control requests need. Host tests verify that the compiled
+coroutine stays alive and execution still starts only through the scheduler.
+Reading the active animation borrows its existing source while the state lock
+is held, avoiding another source-sized allocation. Ownership tests include
+failed reply allocation; the running animation's source remains valid. Reply
+failures now distinguish memory exhaustion from protobuf and size errors.
+
+Final local build 44 was flashed to both boards on 2026-11-23, with every flash
+hash verified. The SK6812 board retained 30 LEDs on GPIO16; the WS2805 board
+retained 104 groups on GPIO16. Physical USB tests used the actual web-client
+transport through a serial adapter: all ten built-in animations, three rounds
+per board with pacing, followed by one round per board with the existing
+unpaced transport. All 80 uploads received acknowledgements, returned identical
+source text, and reported no animation runtime error. There were no USB
+timeouts or device memory errors in these final runs. Both boards' prior
+lighting, brightness, power state and strip configuration were restored.
+These are transport tests, not browser UI or oscilloscope measurements. The
+publication status is recorded in [release status](docs/release-status.md).
+
+SPI DMA reserves `20 * LED count + 240` bytes of internal DMA-capable RAM, up to
+20,720 bytes at 1,024 LEDs. Including the three six-byte color/fade frames, the
+allocations total `38 * LED count + 240` bytes, excluding driver overhead. The
+whole waveform and 600 microsecond reset tail are sent without interrupt refills.
+The following build-29 RMT accounting applies to the remaining RMT targets.
 
 LED output uses ESP-IDF's RMT byte encoder directly instead of Arduino's expanded
 symbol buffer. The ISR reads a small internal-RAM payload of at most five bytes

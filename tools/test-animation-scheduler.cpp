@@ -129,6 +129,19 @@ int main() {
   assert(!animation && animationError[0] && luaMemory==0);
   free(pixels);
  }
+ // Compiler garbage must not occupy control-request headroom on boards without
+ // PSRAM. A second collection should reclaim nothing; the compiled coroutine
+ // must remain rooted and user code must still wait for a scheduler turn.
+ state={};state.config.led_count=1;strcpy(state.config.strip_type,"WS2812");
+ frameCapacity=1;pixels=static_cast<uint8_t (*)[6]>(calloc(1,6));
+ luxio_Script collected{};collected.source=strdup("started=true function loop() luxio_set_pixel_color(0,11,0,0) end");
+ assert(startAnimation(collected).empty());
+ const size_t compiledMemory=luaMemory;
+ lua_gc(animation,LUA_GCCOLLECT);
+ assert(luaMemory==compiledMemory);
+ lua_getglobal(animation,"started");assert(lua_isnil(animation,-1));lua_pop(animation,1);
+ for(int i=0;i<5 && !pixels[0][0];++i){wallTime+=34;step();assert(animation);}
+ assert(pixels[0][0]==11);stopAnimation();free(pixels);
  // Counters wrapping must not make a normal coroutine fail immediately.
  wallTime=UINT32_MAX-20;cpuTime=UINT32_MAX-1500;state.config.led_count=1;frameCapacity=1;pixels=static_cast<uint8_t (*)[6]>(calloc(1,6));
  luxio_Script wrap{};wrap.source=strdup("function loop() for i=1,3000 do local x=i*i end luxio_set_pixel_color(0,99,0,0) end");assert(startAnimation(wrap).empty());

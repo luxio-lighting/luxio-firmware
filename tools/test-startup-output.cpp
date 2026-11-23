@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+// PRODUCTION_LED_DRIVER
+
 #define ESP_ERROR_CHECK(call) assert((call) == 0)
 #define HIGH 1
 #define LOW 0
@@ -39,6 +41,7 @@ static int ledChannel, ledEncoder;
 static std::vector<uint8_t> transmitted;
 static bool txFinished;
 static int rmt_transmit(int, int, const void *data, size_t length, const rmt_transmit_config_t *) {
+  assert(!LUXIO_LED_SPI_DMA);
   transmitted.assign(static_cast<const uint8_t *>(data), static_cast<const uint8_t *>(data) + length);
   txFinished = false; return 0;
 }
@@ -57,6 +60,7 @@ static int rmt_new_bytes_encoder(const rmt_bytes_encoder_config_t *c, int *) {
 static int ledSpi;
 struct spi_transaction_t { size_t length; const void *tx_buffer; };
 static int spi_device_transmit(int, const spi_transaction_t *transaction) {
+  assert(LUXIO_LED_SPI_DMA);
   const auto *bytes = static_cast<const uint8_t *>(transaction->tx_buffer);
   const size_t channels = !strcmp(state.config.strip_type, "WS2805") ? 5 : (!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812")) ? 4 : 3;
   const size_t count = state.config.led_count * channels;
@@ -128,7 +132,7 @@ static void GetQRCode(chip::MutableCharSpan &s, chip::PayloadContents &) { strcp
 // PRODUCTION_STARTUP
 
 int main() {
-  for (int driver : {LUXIO_INTERNAL_RAM_RADIOS}) {
+  for (int driver : {LUXIO_LED_SPI_DMA}) {
   ledSpi = driver;
   for (uint32_t count : {1, 60, 100, 1024}) {
     std::vector<uint8_t> frames(count * 18), packed(count * 20 + 240);

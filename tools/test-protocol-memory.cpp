@@ -1,12 +1,14 @@
 #include <cassert>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <initializer_list>
 #include "luxio.pb.h"
 #include "pb_decode.h"
 #include "pb_encode.h"
 #include "control_error.h"
 #include "control_response.h"
+#include "script_storage.h"
 static bool failOutputAllocation = false;
 static size_t outputAllocation = 0;
 void *operator new[](size_t size, const std::nothrow_t &) noexcept {
@@ -158,9 +160,39 @@ int main() {
   assert(size > 0 && size < 128); // Small status replies stay small.
   assert(outputAllocation == size);
   failOutputAllocation = true;
-  assert(!encodeControlResponse(response, exact, 0) && !exact);
+  const char *encodingError = nullptr;
+  assert(!encodeControlResponse(response, exact, 0, &encodingError) && !exact);
+  assert(!strcmp(encodingError, "Not enough memory for response buffer"));
   failOutputAllocation = false;
   assert(!encodeControlResponse(response, exact, 9) && !exact);
+  // An active-script response borrows source storage owned by the running VM.
+  // Successful encoding and allocation failure must both preserve that owner.
+  std::unique_ptr<char, decltype(&free)> activeSource(strdup("function loop() luxio_fill(1,2,3) end"), &free);
+  for (bool fail : {false, true}) {
+    {
+      ScriptPtr borrowed(new luxio_Script{});
+      borrowed->source = activeSource.get();
+      borrowed.get_deleter().borrowedSource = activeSource.get();
+      response = luxio_Response_init_zero;
+      response.id = 43; response.script = borrowed.get();
+      failOutputAllocation = fail;
+      size = encodeControlResponse(response, exact, 0, &encodingError);
+      failOutputAllocation = false;
+      if (fail) {
+        assert(!size && !exact && !strcmp(encodingError, "Not enough memory for response buffer"));
+      } else {
+        assert(size && !encodingError);
+        decoded = luxio_Response_init_zero;
+        decoder = pb_istream_from_buffer(exact.get(), size);
+        assert(pb_decode(&decoder, luxio_Response_fields, &decoded));
+        assert(decoded.script && !strcmp(decoded.script->source, activeSource.get()));
+        pb_release(luxio_Response_fields, &decoded);
+      }
+    }
+    assert(!strcmp(activeSource.get(), "function loop() luxio_fill(1,2,3) end"));
+  }
+  response = luxio_Response_init_zero;
+  response.id = 42; response.state = &state;
   // Callback listings run for sizing and encoding with stable pagination.
   response.scripts.arg = &script;
   response.scripts.funcs.encode = [](pb_ostream_t *out, const pb_field_t *field, void *const *arg) {
@@ -176,8 +208,10 @@ int main() {
     for (int i = 0; i < 3; i++) if (!pb_encode_tag_for_field(out, field) || !pb_encode_submessage(out, luxio_Script_fields, *arg)) return false;
     return true;
   };
-  assert(!encodeControlResponse(response, exact, 0) && !exact); // Wire limit still enforced.
+  assert(!encodeControlResponse(response, exact, 0, &encodingError) && !exact); // Wire limit still enforced.
+  assert(!strcmp(encodingError, "Response exceeds 32 KiB"));
   response.scripts.funcs.encode = [](pb_ostream_t *, const pb_field_t *, void *const *) { return false; };
-  assert(!encodeControlResponse(response, exact, 0) && !exact);
+  assert(!encodeControlResponse(response, exact, 0, &encodingError) && !exact);
+  assert(!strcmp(encodingError, "Unable to size response protobuf"));
   puts("PASS: compact control structs, full 16 KB scripts, malformed payload cleanup and release");
 }

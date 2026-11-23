@@ -47,7 +47,7 @@ extern "C" {
 #include "vendor/lua/lualib.h"
 }
 #ifndef LUXIO_BUILD
-#define LUXIO_BUILD 39
+#define LUXIO_BUILD 44
 #endif
 #ifndef LUXIO_CLOUD_URL
 #define LUXIO_CLOUD_URL "http://api.luxio.lighting"
@@ -57,6 +57,11 @@ extern "C" {
 #endif
 #ifndef LUXIO_INTERNAL_RAM_RADIOS
 #define LUXIO_INTERNAL_RAM_RADIOS 0
+#endif
+#if LUXIO_INTERNAL_RAM_RADIOS || CONFIG_IDF_TARGET_ESP32S3
+#define LUXIO_LED_SPI_DMA 1
+#else
+#define LUXIO_LED_SPI_DMA 0
 #endif
 #ifndef LUXIO_MATTER_WITHOUT_PSRAM
 #define LUXIO_MATTER_WITHOUT_PSRAM 0
@@ -92,7 +97,7 @@ static std::unique_ptr<OutputTransition> transition;
 static bool identifyActive = false;
 static uint8_t *ledBytes;
 static size_t ledByteCapacity;
-#if LUXIO_INTERNAL_RAM_RADIOS
+#if LUXIO_LED_SPI_DMA
 static spi_device_handle_t ledSpi;
 #endif
 static rmt_channel_handle_t ledChannel;
@@ -168,7 +173,7 @@ static void render() {
   const bool rgbcct = !strcmp(state.config.strip_type, "WS2805");
   const bool rgbw = (!strcmp(state.config.strip_type, "WS2814") || !strcmp(state.config.strip_type, "SK6812"));
   const int channels = rgbcct ? 5 : rgbw ? 4 : 3;
-#if LUXIO_INTERNAL_RAM_RADIOS
+#if LUXIO_LED_SPI_DMA
   const size_t length = encodeLedSpi(transition->displayed, state.config.led_count, channels, ledBytes, (channels == 3 && strcmp(state.config.strip_type, "WS2811")) || !strcmp(state.config.strip_type, "SK6812"), !strcmp(state.config.strip_type, "WS2813") || !strcmp(state.config.strip_type, "WS2815"));
   spi_transaction_t transaction = {};
   transaction.length = length * 8;
@@ -460,6 +465,9 @@ static String startAnimation(luxio_Script &script) {
   if (luaL_loadbuffer(animationThread, source, strlen(source), "Luxio animation") != LUA_OK) {
     String error = lua_tostring(animationThread, -1); stopAnimation(); return error;
   }
+  // Release compiler temporaries before control requests need the same heap.
+  // No user code has run yet, so this cannot invoke user-defined finalizers.
+  if (!psramFound()) lua_gc(L, LUA_GCCOLLECT);
   lua_sethook(animationThread, luaHook, LUA_MASKCOUNT, 1000);
   luaInstructions = 1000000; luaCpuRemaining = 500000; luaBudgetError = nullptr;
   animationStarted = millis(); animationFrameAt = animationStarted;
@@ -681,11 +689,11 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       }
       if (error.length()) break;
       size_t needed = c.led_count * 5;
-#if LUXIO_INTERNAL_RAM_RADIOS
+#if LUXIO_LED_SPI_DMA
       needed = c.led_count * 20 + 240;
 #endif
       if (needed > ledByteCapacity) {
-        auto *replacement = static_cast<uint8_t *>(heap_caps_realloc(ledBytes, needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | (LUXIO_INTERNAL_RAM_RADIOS ? MALLOC_CAP_DMA : 0)));
+        auto *replacement = static_cast<uint8_t *>(heap_caps_realloc(ledBytes, needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | (LUXIO_LED_SPI_DMA ? MALLOC_CAP_DMA : 0)));
         if (!replacement) { error = "Not enough memory for this LED count"; break; }
         ledBytes = replacement; ledByteCapacity = needed;
       }
@@ -705,12 +713,16 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         transition->displayed = pixels + frameCapacity; transition->origin = pixels + frameCapacity * 2; transition->capacity = frameCapacity;
       }
       if (c.gpio != state.config.gpio) {
-#if LUXIO_INTERNAL_RAM_RADIOS
+#if LUXIO_LED_SPI_DMA
+        gpio_config_t output = {};
+        output.pin_bit_mask = 1ULL << c.gpio;
+        output.mode = GPIO_MODE_OUTPUT;
+        // Select the digital IO mux as well as the direction (including RTC pins).
+        gpio_set_level(gpio_num_t(c.gpio), 0);
+        if (gpio_config(&output) != ESP_OK) { error = "Unable to initialize this GPIO"; break; }
         gpio_set_level(gpio_num_t(state.config.gpio), 0);
         esp_rom_gpio_connect_out_signal(state.config.gpio, SIG_GPIO_OUT_IDX, false, false);
         gpio_set_direction(gpio_num_t(state.config.gpio), GPIO_MODE_INPUT);
-        gpio_set_level(gpio_num_t(c.gpio), 0);
-        gpio_set_direction(gpio_num_t(c.gpio), GPIO_MODE_OUTPUT);
         esp_rom_gpio_connect_out_signal(c.gpio, spi_periph_signal[SPI3_HOST].spid_out, false, false);
 #else
         rmt_tx_channel_config_t channel = {};
@@ -745,7 +757,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         memset(transition->displayed, 0, frameCapacity * 6); transition->active = false;
       }
       const bool radioChanged = c.wifi.enabled != state.config.wifi.enabled || c.matter.enabled != state.config.matter.enabled;
-#if !LUXIO_INTERNAL_RAM_RADIOS
+#if !LUXIO_LED_SPI_DMA
       if (strcmp(c.strip_type, state.config.strip_type)) {
         rmt_bytes_encoder_config_t encoding = {};
         encoding.bit0 = {.duration0 = 3, .level0 = 1, .duration1 = 9, .level1 = 0};
@@ -963,8 +975,8 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         auto &script = *responseScript;
         strlcpy(script.id, state.active_script_id, sizeof(script.id));
         strlcpy(script.name, state.script_name, sizeof(script.name));
-        script.source = strdup(activeAnimationSource);
-        if (!script.source) { error = "Not enough memory for animation source"; break; }
+        script.source = activeAnimationSource; // Stable until response encoding releases stateMutex.
+        responseScript.get_deleter().borrowedSource = script.source;
         script.mode = luxio_Mode_ANIMATION;
         script.parameters_count = state.parameters_count; memcpy(script.parameters, state.parameters, sizeof(script.parameters));
         script.preview_count = state.animation_preview_count; memcpy(script.preview, state.animation_preview, sizeof(script.preview));
@@ -1090,15 +1102,17 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
   // with a minimum BLE MTU and a large active gradient or animation.
   // Otherwise borrow state under stateMutex instead of allocating a full copy.
   else if (!response->factory_reset_accepted) { response->state = &state; strlcpy(state.lan_ip, WiFi.localIP().toString().c_str(), sizeof(state.lan_ip)); }
-  size_t size = encodeControlResponse(*response, output, prefix);
+  const char *encodingError = nullptr;
+  size_t size = encodeControlResponse(*response, output, prefix, &encodingError);
   if (!size) {
     memset(response, 0, sizeof(*response));
     response->id = request->id;
-    strlcpy(response->error, "Response exceeds available memory or saved data is invalid", sizeof(response->error));
+    strlcpy(response->error, encodingError ? encodingError : "Unable to encode response", sizeof(response->error));
     size = encodeControlResponse(*response, output, prefix);
   }
   pb_release(luxio_Request_fields, request);
   delete request; delete response;
+  responseScript.reset(); // Detach borrowed source before another task can replace the animation.
   xSemaphoreGive(stateMutex);
   return size;
 }
@@ -1347,6 +1361,11 @@ void setup() {
       ESP_ERROR_CHECK(nvs_flash_init());
     }
   }
+#if CONFIG_IDF_TARGET_ESP32S3 && ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
+  // Native USB receives faster than the render loop drains its queue. Keep
+  // room for ordinary animation uploads without reserving a full 32 KiB frame.
+  if (Serial.setRxBufferSize(2048) != 2048) abort();
+#endif
   Serial.begin(115200); // Binary protocol only; diagnostics must never be written here.
 #if ARDUINO_USB_CDC_ON_BOOT
   Serial0.begin(115200); // Also serve boards wired through an external USB/UART bridge.
@@ -1483,14 +1502,15 @@ void setup() {
   LittleFS.mkdir("/scripts");
   LittleFS.mkdir("/gradients"); LittleFS.mkdir("/colors"); LittleFS.remove("/colors/pending"); LittleFS.remove("/gradients/pending");
   LittleFS.remove("/scripts/pending"); // Discard an interrupted save; the original remains intact.
-  // Use full-frame DMA in the single-core radio profile; ordinary builds use RMT.
+  // S3 and the original ESP32 radio profile send complete waveforms through DMA,
+  // avoiding interrupt refill deadlines while a frame is on the wire.
   ledByteCapacity = state.config.led_count * 5;
-#if LUXIO_INTERNAL_RAM_RADIOS
+#if LUXIO_LED_SPI_DMA
   ledByteCapacity = state.config.led_count * 20 + 240;
 #endif
-  ledBytes = static_cast<uint8_t *>(heap_caps_malloc(ledByteCapacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | (LUXIO_INTERNAL_RAM_RADIOS ? MALLOC_CAP_DMA : 0)));
+  ledBytes = static_cast<uint8_t *>(heap_caps_malloc(ledByteCapacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | (LUXIO_LED_SPI_DMA ? MALLOC_CAP_DMA : 0)));
   if (!ledBytes) abort();
-#if LUXIO_INTERNAL_RAM_RADIOS
+#if LUXIO_LED_SPI_DMA
   spi_bus_config_t bus = {};
   bus.mosi_io_num = state.config.gpio;
   bus.miso_io_num = bus.sclk_io_num = bus.quadwp_io_num = bus.quadhd_io_num = -1;

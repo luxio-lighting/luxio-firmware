@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Compile and package isolated chip builds using the pinned Arduino SDK."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 root = Path(__file__).resolve().parent.parent
 os.chdir(root)
@@ -32,12 +34,33 @@ for target in matrix:
     directory.mkdir(parents=True, exist_ok=True)
     # A failed rebuild must never leave an apparently current release behind.
     shutil.rmtree(directory / 'release', ignore_errors=True)
-    build = os.environ.get('LUXIO_BUILD', '39')
+    build = os.environ.get('LUXIO_BUILD', '44')
     assert build.isdigit() and 0 < int(build) <= 2147483647, 'Invalid LUXIO_BUILD'
     print(f'Building {chip} ({target["architecture"]}), build {build}', flush=True)
     try:
         sdk_base = root / ('.sdk/s31' if chip == 'esp32s31' else '.sdk')
         assert (sdk_base / 'arduino-cli.yaml').exists(), f'Run tools/bootstrap-{"s31.py" if chip == "esp32s31" else "firmware.sh"} first'
+        if chip != 'esp32s31':
+            # Backport the upstream native USB TX fix without upgrading the SDK.
+            core = sdk_base / 'arduino/packages/esp32/hardware/esp32/3.3.3'
+            assert core.resolve().is_relative_to(sdk_base.resolve()), 'Refusing to patch a shared Arduino SDK'
+            assert 'version=3.3.3' in (core / 'platform.txt').read_text().splitlines(), 'Pinned Arduino ESP32 3.3.3 is required'
+            hwcdc = core / 'cores/esp32/HWCDC.cpp'
+            patch = root / 'tools/patches/arduino-esp32-3.3.3-hwcdc-2ecad233.patch'
+            assert hashlib.sha256(patch.read_bytes()).hexdigest() == 'bd9af333f3ba748aed4fe8c017848b1f9961a5a04bbb3bc2d89abe37c9fcfc2a', 'Unexpected HWCDC backport patch'
+            original_hash = '8238d208409ac8a9e74e5960360a5e59c4f2f85dc2339fd96442a62297d5ff45'
+            patched_hash = 'afeebf0de83416b1c899b0037b6c82cbc582709627aee93a22179eac3745be81'
+            installed_hash = hashlib.sha256(hwcdc.read_bytes()).hexdigest()
+            assert installed_hash in (original_hash, patched_hash), 'Unknown HWCDC.cpp; reinstall the pinned SDK before building'
+            if installed_hash == original_hash:
+                with tempfile.TemporaryDirectory(prefix='luxio-hwcdc-') as temporary:
+                    staged = Path(temporary) / 'cores/esp32/HWCDC.cpp'
+                    staged.parent.mkdir(parents=True)
+                    staged.write_bytes(hwcdc.read_bytes())
+                    subprocess.run(['patch', '--batch', '--forward', '--fuzz=0', '-p1', '--directory', temporary, '--input', str(patch)], check=True)
+                    assert hashlib.sha256(staged.read_bytes()).hexdigest() == patched_hash, 'Unexpected HWCDC backport result'
+                    hwcdc.write_bytes(staged.read_bytes())
+                print('Applied upstream HWCDC TX fix 2ecad233 to Arduino ESP32 3.3.3', flush=True)
         sdk_version = 'idf-release_v6.1-9a97f6c5-v2' if chip == 'esp32s31' else 'idf-release_v5.5-f1a1df9b-v3'
         sdk = sdk_base / 'arduino/packages/esp32/tools/esp32-arduino-libs' / sdk_version / chip
         for sketch, folder, capacity in [('Luxio', 'main', target['applicationSize']), ('Recovery', 'recovery', target['recoverySize'])]:
@@ -57,6 +80,9 @@ for target in matrix:
                 subprocess.run([sys.executable, 'tools/build-compact.py', target['id']], check=True)
                 continue
             flags = f'-DLUA_USE_C89 -DPB_ENABLE_MALLOC -fstack-usage -I{root}/Luxio/src/vendor/nanopb'
+            if chip != 'esp32s31':
+                # Change Arduino's core-cache key when adopting the SDK patch.
+                flags += ' -DLUXIO_HWCDC_PATCH_2ECAD233=1'
             if sketch == 'Luxio' and chip == 'esp32' and matter == '0':
                 library = root / '.sdk/user/libraries/NimBLE-Arduino/library.properties'
                 assert library.exists() and 'version=2.5.1' in library.read_text(), 'Run tools/bootstrap-firmware.sh to install NimBLE-Arduino 2.5.1'

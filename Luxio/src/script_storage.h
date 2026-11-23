@@ -11,7 +11,10 @@
 constexpr size_t SCRIPT_SOURCE_MAX = 16384;
 // Decoded strings belong to nanopb; deleting the outer C struct is insufficient.
 struct ScriptDeleter {
+  const char *borrowedSource = nullptr;
   void operator()(luxio_Script *script) const {
+    // Active-script replies borrow their source only while stateMutex is held.
+    if (script && script->source == borrowedSource) script->source = nullptr;
     if (script) pb_release(luxio_Script_fields, script);
     delete script;
   }
