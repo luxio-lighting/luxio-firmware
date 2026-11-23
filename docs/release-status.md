@@ -785,7 +785,7 @@ targets require 4 MB. Publication did not reflash or reset either connected boar
 
 Build 45's fast scan failed immediately on an LX0001 while saved Wi-Fi credentials were being retried. Build 46 pauses automatic reconnection and cancels the in-progress IDF connection before a scan, then resumes it after completion. Arduino's disconnect wrapper does not cancel an attempt until association succeeds. Already-associated links are left connected.
 
-The ESP32-S3 main/recovery package was built and passed size and stack checks. The full host test suite passed, including scan deadline and reconnect pause/resume regressions. Other build-46 targets have not been rebuilt or hardware-qualified.
+The ESP32-S3 main/recovery package was built and passed size and stack checks. The full host test suite passed, including scan deadline and reconnect pause/resume regressions. At this stage, other build-46 targets had not yet been rebuilt or hardware-qualified; the subsequent public build is recorded below.
 
 Both user-authorized USB-connected units received the S3 application after full-flash backups. Application SHA-256 readback matched `2b54b9466673557efa2378c168ac5010afe7b6ba683cdf2ef658389f57d2a754`. Existing partition tables matched; bootloader, recovery, NVS, OTA selection and library partitions were not flashed. Both rebooted into build 46, answered three consecutive USB state requests, and retained their device identity and configuration.
 
@@ -794,4 +794,27 @@ Both user-authorized USB-connected units received the S3 application after full-
 | Luxio LX0001 5V | 30 | 1885 ms | 3 | None |
 | Luxio LX0001 24V | 104 | 1890 ms | 3 | None |
 
-Timing includes the USB polling overhead. Correct-password reconnection and Matter commissioning were not part of this verification. Local backups and evidence are in `.sdk/flash45-20261123/` and `.sdk/flash46-20261123/`. The local web flasher serves build 46 for S3, while its other targets retain build 45. No public release was uploaded or registered.
+Timing includes the USB polling overhead. Correct-password reconnection and Matter commissioning were not part of this verification. Local backups and evidence are in `.sdk/flash45-20261123/` and `.sdk/flash46-20261123/`. The local web flasher serves build 46 for S3, while its other targets retain build 45. No public release was uploaded or registered during that local verification.
+
+
+## Build 46 publication (2026-11-23)
+
+Build 46 was published for all six targets on channel 0 from commit
+`dab1f83bc1436a2119b69cbc2a8c3fcd34fdfee1` by
+[workflow 45214717934](https://github.com/luxio-lighting/luxio-firmware/actions/runs/45214717934).
+Every target build and the publication job passed. Independent public downloads
+verified all six ECDSA signatures and all thirty flash parts: sizes, SHA-256,
+chip IDs, flash-size headers, required addresses and application/recovery build
+numbers. HTTP manifests matched HTTPS, and HTTP application downloads matched
+the signed SHA-256 without redirects. S31 requires 8 MB; the remaining targets
+require 4 MB. Publication did not reflash either connected board. Hardware
+verification remains limited to the two S3 units described above.
+
+| Chip | Published application bytes | SHA-256 |
+| --- | ---: | --- |
+| esp32 | 2,304,448 | `97f8038197ecba39ad4cbda06cc181b96b9007463da720f7fbc7c850ab8ef31a` |
+| esp32s3 | 2,259,312 | `43cb1f8a95e1f570b05e72ee01d48e99c3b11f2d05f056375facd159a7c29a1c` |
+| esp32s31 | 3,059,632 | `6a3c3cc2c90b0ca4253268ba24b15cace4ac3c620b711aa5cc0ab61b513e99a2` |
+| esp32c3 | 2,288,112 | `cef2f72af8e80dc5ab3ee4c9bf5f9d6eceb355fe5a7e476ee2b1227531e04096` |
+| esp32c5 | 2,495,504 | `b66ebcc9e71871cc05cc91c08db03aa3863560ee76f6b1b2c5afa93362c83541` |
+| esp32c6 | 2,428,032 | `6a2adfea8d9a774c18022eeed9351ab332f553c2f6130dd2b0e2b0b8bf61a87b` |
