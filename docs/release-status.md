@@ -733,3 +733,49 @@ S31 USB flashing and device-reported LED types; the marketing website lists
 ESP32-S31 (8 MB+) without a preview label. WS2811, WS2813 and WS2815 support is
 included in this release. Native client and CLI source changes are pushed; this
 publication did not submit new mobile store builds.
+
+## Build 44 LED output and USB reliability (2026-11-23)
+
+ESP32-S3 now sends complete LED waveforms through SPI DMA, including valid
+WS2805 bit timing, without the former RMT interrupt-refill deadlines. Its radio
+and Matter memory policy is unchanged. Native S3 USB has a 2,048-byte receive
+queue; the pinned Arduino 3.3.3 SDK includes Espressif's HWCDC TX fix for lost
+wakeups and partial FIFO writes. No-PSRAM animation startup collects compiler
+temporaries, and active-source readback borrows the existing source under the
+state lock. Response errors distinguish memory, protobuf and size failures.
+
+Local build 44 was flashed to two LX0001 boards with all flash hashes verified:
+SK6812 with 30 LEDs and WS2805 with 104 addressable groups, both on GPIO16.
+All 80 physical USB animation-upload/readback cycles passed across these boards,
+including 20 cycles using the existing unpaced web-client transport. Exact
+source text and running state were checked; prior lighting and configuration
+were restored. The user confirmed that the earlier DMA test removed WS2805
+flicker. These checks do not establish visual SK6812, oscilloscope, Matter or
+other-board qualification. No PCB changes were made.
+
+Firmware host tests, all 38 TypeScript tests, TypeScript checking, and storage
+tests with address/undefined-behavior sanitizers pass. The web-app USB pacing
+change passed all 40 tests and was deployed in
+[run 45191227220](https://github.com/luxio-lighting/app.luxio.lighting/actions/runs/45191227220).
+The live JavaScript was independently fetched and matched the tested build,
+including 128-byte writes with 40ms gaps.
+
+Build 44 was published for all six targets on channel 0 from commit
+`4aa3c7d061486417a0750a91466291c68ec557e5` by
+[workflow 45191644870](https://github.com/luxio-lighting/luxio-firmware/actions/runs/45191644870).
+Every build and the publication job passed. Independent public downloads
+verified all six ECDSA signatures and all thirty flash parts: sizes, SHA-256,
+embedded chip IDs, application/recovery build numbers, flash sizes, partition
+addresses, partition-table MD5, nonoverlap and erased OTA selection. HTTP
+device manifests matched HTTPS, and all six HTTP application downloads were
+byte-identical to HTTPS without redirects. S31 requires 8 MB; the remaining
+targets require 4 MB. Publication did not reflash or reset either connected board.
+
+| Chip | Published application bytes | SHA-256 |
+| --- | ---: | --- |
+| esp32 | 2,303,936 | `f677b7bdda798a8e8957676e82ecb07fad76a3e26df316c9abc68b3bdd40d9e7` |
+| esp32s3 | 2,258,800 | `9344ed0dad03d8ab10e23366e0002a5642d1eed1a937118ec4abd0af41ecd988` |
+| esp32s31 | 3,059,168 | `50e98edad45eca5a501e561f79b708a987997f2ecbbf265a1c677449d39320d9` |
+| esp32c3 | 2,287,616 | `9c6e3f00b8fcca46817f4bcf91a1c1120bb5704127f77fbe624e277a136ba848` |
+| esp32c5 | 2,495,008 | `b814901ddbba9e1c937bbac2e766c5377e6da860ff787c2dae38bfb717c6920a` |
+| esp32c6 | 2,427,552 | `b9abbcee9ec56dd88e0ecfbe5f0c1ce24c4effa16704d8e34cf480584de591a8` |
