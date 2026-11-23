@@ -110,6 +110,8 @@ message State {
   string script_name = 13; // Display name for the active animation, saved or in-memory.
 }
 message Request {
+  uint32 wifi_scan_timeout_ms = 19; // SCAN_WIFI budget: 250–8000 ms; zero retains the 8000 ms default.
+  bool config_preview = 20; // SET_CONFIG: apply in RAM without saving; a normal SET_CONFIG commits.
   bool factory_reset_confirmed = 18;
   uint32 id = 1;
   Operation operation = 2;

@@ -779,3 +779,19 @@ targets require 4 MB. Publication did not reflash or reset either connected boar
 | esp32c3 | 2,287,616 | `9c6e3f00b8fcca46817f4bcf91a1c1120bb5704127f77fbe624e277a136ba848` |
 | esp32c5 | 2,495,008 | `b814901ddbba9e1c937bbac2e766c5377e6da860ff787c2dae38bfb717c6920a` |
 | esp32c6 | 2,427,552 | `b9abbcee9ec56dd88e0ecfbe5f0c1ce24c4effa16704d8e34cf480584de591a8` |
+
+
+## Local build 46 Wi-Fi scan verification (2026-11-23)
+
+Build 45's fast scan failed immediately on an LX0001 while saved Wi-Fi credentials were being retried. Build 46 pauses automatic reconnection and cancels the in-progress IDF connection before a scan, then resumes it after completion. Arduino's disconnect wrapper does not cancel an attempt until association succeeds. Already-associated links are left connected.
+
+The ESP32-S3 main/recovery package was built and passed size and stack checks. The full host test suite passed, including scan deadline and reconnect pause/resume regressions. Other build-46 targets have not been rebuilt or hardware-qualified.
+
+Both user-authorized USB-connected units received the S3 application after full-flash backups. Application SHA-256 readback matched `2b54b9466673557efa2378c168ac5010afe7b6ba683cdf2ef658389f57d2a754`. Existing partition tables matched; bootloader, recovery, NVS, OTA selection and library partitions were not flashed. Both rebooted into build 46, answered three consecutive USB state requests, and retained their device identity and configuration.
+
+| Unit | LEDs retained | First 2000 ms scan | Networks | Scan error |
+| --- | --- | --- | --- | --- |
+| Luxio LX0001 5V | 30 | 1885 ms | 3 | None |
+| Luxio LX0001 24V | 104 | 1890 ms | 3 | None |
+
+Timing includes the USB polling overhead. Correct-password reconnection and Matter commissioning were not part of this verification. Local backups and evidence are in `.sdk/flash45-20261123/` and `.sdk/flash46-20261123/`. The local web flasher serves build 46 for S3, while its other targets retain build 45. No public release was uploaded or registered.

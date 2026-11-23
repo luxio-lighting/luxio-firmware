@@ -47,7 +47,7 @@ extern "C" {
 #include "vendor/lua/lualib.h"
 }
 #ifndef LUXIO_BUILD
-#define LUXIO_BUILD 44
+#define LUXIO_BUILD 46
 #endif
 #ifndef LUXIO_CLOUD_URL
 #define LUXIO_CLOUD_URL "http://api.luxio.lighting"
@@ -123,7 +123,8 @@ static uint32_t radioRestartAt, factoryResetAt;
 static bool factoryResetPending;
 static String wifiSsid, wifiPassword;
 static std::atomic<uint32_t> wifiDisconnectCount{0}, wifiDisconnectReason{0};
-static bool wifiScanning, wifiScanPending;
+static bool wifiScanning, wifiScanPending, wifiScanStopRequested, wifiScanReconnect;
+static uint32_t wifiScanStarted, wifiScanTimeoutMs = 8000;
 static std::unique_ptr<luxio_WifiNetwork[]> wifiNetworks;
 static pb_size_t wifiNetworkCount;
 static String wifiScanError;
@@ -712,6 +713,16 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
         free(pixels); pixels = replacement; frameCapacity = c.led_count;
         transition->displayed = pixels + frameCapacity; transition->origin = pixels + frameCapacity * 2; transition->capacity = frameCapacity;
       }
+      // Clear pixels that would otherwise retain their last latched color when
+      // shortening the strip or moving to another pin/type during setup.
+      // CONFIG_CLEAR_OLD_OUTPUT_BEGIN
+      if (c.led_count < state.config.led_count || c.gpio != state.config.gpio || strcmp(c.strip_type, state.config.strip_type)) {
+        const uint32_t first = c.gpio == state.config.gpio && !strcmp(c.strip_type, state.config.strip_type) ? c.led_count : 0;
+        memset(pixels + first, 0, (state.config.led_count - first) * 6);
+        transition->active = false;
+        render();
+      }
+      // CONFIG_CLEAR_OLD_OUTPUT_END
       if (c.gpio != state.config.gpio) {
 #if LUXIO_LED_SPI_DMA
         gpio_config_t output = {};
@@ -779,7 +790,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!pb_encode(&encoder, luxio_Config_fields, &c)) { error = "Unable to encode settings"; break; }
       const size_t previousSize = prefs.getBytesLength("config");
       const bool unchanged = previousSize == encoder.bytes_written && prefs.getBytes("config", previous, previousSize) == previousSize && !memcmp(previous, saved, previousSize);
-      if (!unchanged && prefs.putBytes("config", saved, encoder.bytes_written) != encoder.bytes_written) { error = "Unable to save settings"; break; }
+      if (!request->config_preview && !unchanged && prefs.putBytes("config", saved, encoder.bytes_written) != encoder.bytes_written) { error = "Unable to save settings"; break; }
       const bool nameChanged = strcmp(c.name, state.config.name) != 0;
       state.config = c; animationFrameReady = true; // Apply relay changes even during a long frame.
       if (nameChanged) setBluetoothName(state.config.name);
@@ -797,6 +808,9 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!state.config.wifi.enabled) { error = "Wi-Fi is disabled"; break; }
       if (!wifiScanning) {
         wifiScanning = wifiScanPending = true;
+        wifiScanStopRequested = false;
+        wifiScanStarted = millis();
+        wifiScanTimeoutMs = request->wifi_scan_timeout_ms ? constrain(request->wifi_scan_timeout_ms, 250U, 8000U) : 8000;
         wifiNetworkCount = 0; wifiScanError = "";
       }
       break;
@@ -1704,9 +1718,32 @@ void loop() {
       const bool starting = wifiScanPending;
       if (wifiScanPending) {
         wifiScanPending = false;
-        WiFi.setScanTimeout(15000);
-        count = WiFi.scanNetworks(true);
+        // WIFI_SCAN_PAUSE_CONNECT_BEGIN
+        wifiScanReconnect = !WiFi.STA.connected() && wifiSsid.length();
+        if (wifiScanReconnect) {
+          WiFi.setAutoReconnect(false);
+          // Arduino disconnect() does nothing until association succeeds.
+          // Cancel the in-progress IDF attempt so it cannot block the scan.
+          esp_wifi_disconnect();
+        }
+        // WIFI_SCAN_PAUSE_CONNECT_END
+        // Keep Arduino's watchdog beyond our deadline so its callback can
+        // collect partial results after esp_wifi_scan_stop().
+        WiFi.setScanTimeout(wifiScanTimeoutMs + 1000);
+        WiFi.setScanActiveMinTime(wifiScanTimeoutMs <= 2000 ? 20 : 100);
+        count = WiFi.scanNetworks(true, false, false, wifiScanTimeoutMs <= 2000 ? 40 : 300);
       } else count = WiFi.scanComplete();
+      // WIFI_SCAN_DEADLINE_BEGIN
+      const uint32_t elapsed = millis() - wifiScanStarted;
+      if (count == WIFI_SCAN_RUNNING && !wifiScanStopRequested && elapsed >= wifiScanTimeoutMs - 200) {
+        wifiScanStopRequested = true;
+        esp_wifi_scan_stop(); // Emits SCAN_DONE; retain the APs already found.
+      }
+      if (count == WIFI_SCAN_RUNNING && elapsed >= wifiScanTimeoutMs - 50) {
+        count = WiFi.scanComplete();
+        if (count == WIFI_SCAN_RUNNING) count = WIFI_SCAN_FAILED;
+      }
+      // WIFI_SCAN_DEADLINE_END
       if (count != WIFI_SCAN_RUNNING) {
         if (count < 0) {
           if (!starting) esp_wifi_scan_stop();
@@ -1740,6 +1777,13 @@ void loop() {
           }
         }
         WiFi.scanDelete(); wifiScanning = false;
+        // WIFI_SCAN_RESUME_CONNECT_BEGIN
+        if (wifiScanReconnect) {
+          WiFi.setAutoReconnect(true);
+          wifiPending = true;
+          wifiScanReconnect = false;
+        }
+        // WIFI_SCAN_RESUME_CONNECT_END
       }
     }
     if (wifiPending && !wifiScanning) { wifiPending = false; WiFi.disconnect(); WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str()); }

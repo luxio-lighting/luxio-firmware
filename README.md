@@ -5,9 +5,9 @@ The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware 
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
-LUXIO_BUILD=44 tools/build-firmware.sh all
+LUXIO_BUILD=46 tools/build-firmware.sh all
 # Or build just one target:
-LUXIO_BUILD=44 tools/build-firmware.sh esp32
+LUXIO_BUILD=46 tools/build-firmware.sh esp32
 ```
 
 The Arduino SDK is local to this repository in `.sdk/`. The bootstrap creates it from official packages. No shared SDK link or sibling checkout is used. Standard host tools (Arduino CLI, Python 3 and a C++ compiler) must be installed.
@@ -219,6 +219,10 @@ Run `DEVICE_ADDRESS=<ip> DEVICE_SERIAL=<port> node --import tsx tools/test-power
 ## Wi-Fi discovery (build 12)
 
 Send `SCAN_WIFI` (operation 16) over USB or the HTTP/WebSocket Protobuf API. It returns immediately with `wifiScanning: true`; poll `GET_STATE` until that becomes false. `wifiNetworks` contains `{ ssid, rssi, passwordRequired }` entries, with RSSI in dBm (negative values; higher is stronger). `wifiScanError` reports a failed scan separately from command errors. Repeating `SCAN_WIFI` while scanning joins the current scan; sending it after completion starts a fresh scan.
+
+Build 45 adds `wifiScanTimeoutMs` (250–8000 ms; omitted/zero defaults to 8000). Initial setup uses 2000 ms with shorter active channel dwell times; manual refresh uses 8000 ms. The deadline stops the asynchronous scan and retains the access points already found. It does not block LED rendering. Network/transport delays are additional to this firmware budget. Build 46 also cancels an in-progress Wi-Fi connection attempt before scanning and resumes it afterward, retaining credentials. Already-associated connections stay connected. This prevents saved incorrect credentials from blocking setup scans.
+
+`SET_CONFIG` accepts `configPreview: true` to apply settings in RAM without writing the configuration to NVS. Send the final configuration again without that flag to save it. Clients should restore the original configuration when cancelling a preview. Reducing the LED count clears the old tail before rendering the shorter strip. Both fields are ignored by older firmware.
 
 Results contain up to 32 distinct SSID/security pairs, strongest first. Duplicate access points use the strongest signal. Hidden SSIDs are omitted; Setup offers manual entry. Open and OWE networks do not require a password. Results are cached in RAM until the next scan. Scanning is asynchronous, keeps the current connection and LED rendering active, and delays a pending Wi-Fi connection change until the scan finishes.
 

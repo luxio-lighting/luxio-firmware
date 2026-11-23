@@ -13,7 +13,8 @@ render = source[source.index('static void render()'):source.index('static void a
 startup = source[source.index('static void cloudTask(void *)'):source.index('    if (!lastAnnouncement ||')]
 startup += '    vTaskDelay(1000);\n  }\n}\n'
 encoding = source[source.index('  rmt_bytes_encoder_config_t encoding = {};', source.index('void setup()')):source.index('  ESP_ERROR_CHECK(rmt_enable(ledChannel));', source.index('void setup()'))]
-fixture = (root / 'tools/test-startup-output.cpp').read_text()
+clear_output = source.split('// CONFIG_CLEAR_OLD_OUTPUT_BEGIN')[1].split('// CONFIG_CLEAR_OLD_OUTPUT_END')[0]
+fixture = (root / 'tools/test-startup-output.cpp').read_text().replace('// PRODUCTION_CLEAR_OLD_OUTPUT', clear_output)
 fixture = fixture.replace('// PRODUCTION_LED_DRIVER', driver).replace('// PRODUCTION_RENDER', render).replace('// PRODUCTION_STARTUP', startup).replace('// PRODUCTION_ENCODING', encoding)
 (root / '.sdk').mkdir(exist_ok=True)
 cpp = root / '.sdk/test-startup-output.cpp'; cpp.write_text(fixture)

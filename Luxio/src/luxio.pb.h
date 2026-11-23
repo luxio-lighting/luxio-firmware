@@ -189,6 +189,8 @@ typedef struct _luxio_Request {
     pb_size_t parameters_count;
     luxio_AnimationParameter parameters[16]; /* Values to patch; name/boolean/value are required logically. */
     bool factory_reset_confirmed;
+    uint32_t wifi_scan_timeout_ms; /* SCAN_WIFI budget: 250–8000 ms; zero retains the 8000 ms default. */
+    bool config_preview; /* SET_CONFIG: apply in RAM without saving; a normal SET_CONFIG commits. */
 } luxio_Request;
 
 /* Read-only network diagnostics, reported with GET_STATE. */
@@ -284,7 +286,7 @@ extern "C" {
 #define luxio_Gradient_init_default              {"", "", 0, {luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default}, ""}
 #define luxio_SavedColor_init_default            {"", "", false, luxio_Color_init_default}
 #define luxio_State_init_default                 {"", 0, false, luxio_Config_init_default, 0, false, luxio_Color_init_default, "", "", _luxio_Mode_MIN, 0, "", false, luxio_Gradient_init_default, "", "", 0, {luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default}, 0, {luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default, luxio_Color_init_default}, 0, 0, 0, 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}}
-#define luxio_Request_init_default               {0, _luxio_Operation_MIN, false, luxio_Color_init_default, 0, false, luxio_Config_init_default, false, luxio_Wifi_init_default, NULL, "", 0, 0, NULL, "", 0, false, luxio_SavedColor_init_default, "", 0, 0, {luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default}, 0}
+#define luxio_Request_init_default               {0, _luxio_Operation_MIN, false, luxio_Color_init_default, 0, false, luxio_Config_init_default, false, luxio_Wifi_init_default, NULL, "", 0, 0, NULL, "", 0, false, luxio_SavedColor_init_default, "", 0, 0, {luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default, luxio_AnimationParameter_init_default}, 0, 0, 0}
 #define luxio_NetworkStatus_init_default         {0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", "", 0, {"", ""}, 0, 0}
 #define luxio_Response_init_default              {0, "", NULL, {{NULL}, NULL}, NULL, "", "", 0, 0, "", 0, 0, NULL, 0, "", {{NULL}, NULL}, NULL, 0, {{NULL}, NULL}, false, luxio_SavedColor_init_default, 0, false, luxio_NetworkStatus_init_default, "", 0}
 #define luxio_Color_init_zero                    {0, 0, 0, 0, 0, 0}
@@ -298,7 +300,7 @@ extern "C" {
 #define luxio_Gradient_init_zero                 {"", "", 0, {luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero}, ""}
 #define luxio_SavedColor_init_zero               {"", "", false, luxio_Color_init_zero}
 #define luxio_State_init_zero                    {"", 0, false, luxio_Config_init_zero, 0, false, luxio_Color_init_zero, "", "", _luxio_Mode_MIN, 0, "", false, luxio_Gradient_init_zero, "", "", 0, {luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero}, 0, {luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero, luxio_Color_init_zero}, 0, 0, 0, 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}}
-#define luxio_Request_init_zero                  {0, _luxio_Operation_MIN, false, luxio_Color_init_zero, 0, false, luxio_Config_init_zero, false, luxio_Wifi_init_zero, NULL, "", 0, 0, NULL, "", 0, false, luxio_SavedColor_init_zero, "", 0, 0, {luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero}, 0}
+#define luxio_Request_init_zero                  {0, _luxio_Operation_MIN, false, luxio_Color_init_zero, 0, false, luxio_Config_init_zero, false, luxio_Wifi_init_zero, NULL, "", 0, 0, NULL, "", 0, false, luxio_SavedColor_init_zero, "", 0, 0, {luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero, luxio_AnimationParameter_init_zero}, 0, 0, 0}
 #define luxio_NetworkStatus_init_zero            {0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", "", 0, {"", ""}, 0, 0}
 #define luxio_Response_init_zero                 {0, "", NULL, {{NULL}, NULL}, NULL, "", "", 0, 0, "", 0, 0, NULL, 0, "", {{NULL}, NULL}, NULL, 0, {{NULL}, NULL}, false, luxio_SavedColor_init_zero, 0, false, luxio_NetworkStatus_init_zero, "", 0}
 
@@ -383,6 +385,8 @@ extern "C" {
 #define luxio_Request_color_offset_tag           16
 #define luxio_Request_parameters_tag             17
 #define luxio_Request_factory_reset_confirmed_tag 18
+#define luxio_Request_wifi_scan_timeout_ms_tag   19
+#define luxio_Request_config_preview_tag         20
 #define luxio_NetworkStatus_connected_tag        1
 #define luxio_NetworkStatus_rssi_tag             2
 #define luxio_NetworkStatus_bssid_tag            3
@@ -559,7 +563,9 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  saved_color,      14) \
 X(a, STATIC,   SINGULAR, STRING,   color_id,         15) \
 X(a, STATIC,   SINGULAR, UINT32,   color_offset,     16) \
 X(a, STATIC,   REPEATED, MESSAGE,  parameters,       17) \
-X(a, STATIC,   SINGULAR, BOOL,     factory_reset_confirmed,  18)
+X(a, STATIC,   SINGULAR, BOOL,     factory_reset_confirmed,  18) \
+X(a, STATIC,   SINGULAR, UINT32,   wifi_scan_timeout_ms,  19) \
+X(a, STATIC,   SINGULAR, BOOL,     config_preview,   20)
 #define luxio_Request_CALLBACK NULL
 #define luxio_Request_DEFAULT NULL
 #define luxio_Request_color_MSGTYPE luxio_Color

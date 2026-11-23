@@ -155,6 +155,24 @@ int main() {
         if (channels == 5) assert(transmitted[i * channels + 3] == pixels[i][4] && transmitted[i * channels + 4] == pixels[i][5]);
       }
     }
+    // Shortening the strip must transmit black through the old end, using
+    // both production encoders; otherwise those LEDs stay latched on.
+    for (bool changePin : {false, true}) {
+      for (auto strip : {"WS2805", "WS2814", "WS2812", "SK6812"}) {
+        strcpy(state.config.strip_type, strip);
+        memset(pixels, 120, count * 6);
+        render();
+        luxio_Config c = state.config;
+        c.led_count = count > 1 ? count - 1 : 1;
+        if (changePin) c.gpio++;
+        // PRODUCTION_CLEAR_OLD_OUTPUT
+        const int channels = !strcmp(strip, "WS2805") ? 5 : !strcmp(strip, "WS2812") ? 3 : 4;
+        assert(transmitted.size() == count * channels);
+        const uint32_t first = changePin ? 0 : c.led_count;
+        for (uint32_t i = 0; i < count; i++) for (int channel = 0; channel < channels; channel++)
+          assert(transmitted[i * channels + channel] == (i < first ? 120 : 0));
+      }
+    }
     state.on = false; render(); assert(pinLevel == LOW);
     for (uint8_t value : transmitted) assert(value == 0);
   }
