@@ -818,3 +818,32 @@ verification remains limited to the two S3 units described above.
 | esp32c3 | 2,288,112 | `cef2f72af8e80dc5ab3ee4c9bf5f9d6eceb355fe5a7e476ee2b1227531e04096` |
 | esp32c5 | 2,495,504 | `b66ebcc9e71871cc05cc91c08db03aa3863560ee76f6b1b2c5afa93362c83541` |
 | esp32c6 | 2,428,032 | `6a2adfea8d9a774c18022eeed9351ab332f553c2f6130dd2b0e2b0b8bf61a87b` |
+
+
+## Button controls: build 47 release preparation (2026-11-24)
+
+Build 47 adds an optional active-low button, default disabled on GPIO18, matching
+LX0001 hardware. Short presses toggle power or cycle saved colors, gradients,
+and animations. Holding for one second turns off. Firmware and Studio reject
+shared button/data/relay pins; debounce, held-at-boot suppression and fixed
+long-press behavior are covered by host tests. Preset cycling tests exercise
+wraparound, empty libraries, unusable files and single-LED gradient exclusion.
+
+The full firmware host/storage/protocol suite and type check passed. Studio’s
+build, full suite and additional interactive settings-save tests passed. The S3
+application and recovery fit their partitions; combined control stack usage was
+2176/4096 bytes. The new application was tested locally under build number 46
+(SHA-256 `dae6d22f985713efc8442185fed08c093e29aa13a4dda78d1d5448ac072d86c2`)
+before allocating the distinct public build number 47.
+
+Both connected LX0001 units were backed up and flashed with the local S3
+application. Each answered three USB state requests with the new Button fields,
+unchanged identity/settings and GPIO18 disabled. The 5V unit retained 30 LEDs;
+the 24V unit retained 61. Saved preset flash regions were independently verified
+unchanged. On the 24V unit, USB full-image readback was noisy; installation and
+saved files were instead verified with on-device digests. Private backups and
+verification records remain ignored in `.sdk/button-flash-20261124/`.
+
+Physical switch presses and other chip boards have not been hardware-tested in
+this change. Public matrix build and publication results will be recorded after
+the release workflow completes.

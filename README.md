@@ -322,6 +322,28 @@ send an explicit relay message with enabled=false.
 GLEDOPTO references: [current manufacturer product page and manual](https://www.gledopto.com/h-pd-91.html),
 [older GPIO12 manual](https://www.gledopto.eu/mediafiles/anleitungen/7002-gl-c-016wl-d-eng.pdf).
 
+## Optional button
+
+Build 47 adds Studio’s Settings → Button for an active-low momentary switch wired between
+its GPIO and ground. It defaults to disabled, GPIO18 (Luxio LX0001’s user button),
+and Toggle On/Off. The selected pin uses an internal pull-up and must differ from
+the LED data and enabled relay pins. Reserved pins and pins without a pull-up
+are rejected. Choose a suitable pin for your board before enabling it.
+
+A short press either toggles power or cycles saved colors, gradients, then
+animations in stable file-ID order. Cycling wraps, skips unusable files and
+omits gradients on a single-LED strip. With no usable saved presets it does
+nothing. Hold for one second to turn off; releasing after a long press does not
+also trigger the short-press action. A button held during startup or a button
+configuration change must be released first. Both edges are debounced for 30 ms.
+Actions use the normal fade transitions, preserve brightness, and do not write
+to flash.
+
+`Config.button` contains `enabled`, `gpio`, and `press` (`TOGGLE_POWER = 0`,
+`CYCLE_SAVED_PRESETS = 1`). The firmware always reports this field; Studio leaves
+the toggle disabled on older firmware without it. Omitting it from `SET_CONFIG`
+preserves the current settings. Long-press behavior is fixed and not configurable.
+
 ## Response and update memory (build 32)
 
 Replies allocate their encoded size on demand across HTTP, WebSocket, USB and

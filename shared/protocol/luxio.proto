@@ -55,6 +55,10 @@ message Color {
 // An absent relay leaves existing settings unchanged in SET_CONFIG.
 // Send enabled=false explicitly to disable it. Older saved configs default off.
 message RelayConfig { bool enabled = 1; uint32 gpio = 2; bool inverted = 3; }
+// Active-low switch to ground with an internal pull-up. Long press always turns off.
+// Omitted button settings retain their current value; default disabled on GPIO 18.
+enum ButtonPressAction { TOGGLE_POWER = 0; CYCLE_SAVED_PRESETS = 1; }
+message ButtonConfig { bool enabled = 1; uint32 gpio = 2; ButtonPressAction press = 3; }
 // Omitted feature settings retain their current value. Both default enabled.
 message FeatureConfig { bool enabled = 1; }
 message Config {
@@ -66,6 +70,7 @@ message Config {
   RelayConfig relay = 6;
   FeatureConfig wifi = 7;
   FeatureConfig matter = 8;
+  ButtonConfig button = 9;
 }
 message Wifi { string ssid = 1; string password = 2; }
 message WifiNetwork { string ssid = 1; sint32 rssi = 2; bool password_required = 3; }

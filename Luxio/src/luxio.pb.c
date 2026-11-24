@@ -12,6 +12,9 @@ PB_BIND(luxio_Color, luxio_Color, AUTO)
 PB_BIND(luxio_RelayConfig, luxio_RelayConfig, AUTO)
 
 
+PB_BIND(luxio_ButtonConfig, luxio_ButtonConfig, AUTO)
+
+
 PB_BIND(luxio_FeatureConfig, luxio_FeatureConfig, AUTO)
 
 
@@ -46,6 +49,8 @@ PB_BIND(luxio_NetworkStatus, luxio_NetworkStatus, AUTO)
 
 
 PB_BIND(luxio_Response, luxio_Response, 4)
+
+
 
 
 

@@ -34,7 +34,7 @@ for target in matrix:
     directory.mkdir(parents=True, exist_ok=True)
     # A failed rebuild must never leave an apparently current release behind.
     shutil.rmtree(directory / 'release', ignore_errors=True)
-    build = os.environ.get('LUXIO_BUILD', '46')
+    build = os.environ.get('LUXIO_BUILD', '47')
     assert build.isdigit() and 0 < int(build) <= 2147483647, 'Invalid LUXIO_BUILD'
     print(f'Building {chip} ({target["architecture"]}), build {build}', flush=True)
     try:

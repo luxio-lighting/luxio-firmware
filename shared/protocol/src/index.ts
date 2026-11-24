@@ -21,6 +21,7 @@ export const configSchema = z.object({
   channel: z.number().int().min(0).max(100),
   wifi: z.object({ enabled: z.boolean() }).nullish(),
   matter: z.object({ enabled: z.boolean() }).nullish(),
+  button: z.object({ enabled: z.boolean(), gpio: z.number().int().min(0).max(61), press: z.union([z.literal(0), z.literal(1)]) }).nullish(),
   relay: z.object({ enabled: z.boolean(), gpio: z.number().int().min(0).max(61), inverted: z.boolean() }).nullish(),
 });
 export const parameterSchema = z.object({ name: z.string().min(1).max(32), boolean: z.boolean().default(false), numberInput: z.boolean().optional(), value: z.number().finite(), defaultValue: z.number().default(0), minimum: z.number().default(0), maximum: z.number().default(0) });

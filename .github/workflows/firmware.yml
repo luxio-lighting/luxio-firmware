@@ -9,7 +9,7 @@ on:
         description: Firmware build number (increase for each new release)
         type: number
         required: true
-        default: 46
+        default: 47
       publish:
         description: Upload binaries to MongoDB through the API and register updates
         type: boolean
@@ -78,6 +78,12 @@ jobs:
       - name: Test configured Bluetooth names and queued renames
         if: matrix.chip == 'esp32'
         run: python3 tools/test-bluetooth-name.py
+      - name: Test physical button handling and preset cycling
+        if: matrix.chip == 'esp32s3'
+        run: |
+          c++ -std=c++17 -fsanitize=address,undefined tools/test-button.cpp -o .sdk/test-button
+          .sdk/test-button
+          python3 tools/test-button-actions.py
       - name: Build firmware and enforce image identity, partition sizes and stack budgets
         env:
           LUXIO_BUILD: ${{ needs.matrix.outputs.build }}

@@ -52,6 +52,7 @@ export class Device {
           if (!simulatorStripTypes.includes(config.stripType)) throw new Error('Unsupported strip type');
           config.wifi ??= this.state.config.wifi; config.matter ??= this.state.config.matter;
           config.relay ??= this.state.config.relay;
+          config.button ??= this.state.config.button;
           if (config.stripType !== this.state.config.stripType || config.ledCount !== this.state.config.ledCount || config.gpio !== this.state.config.gpio) {
             this.animation?.close(); this.animation = undefined; this.state.activeColorId = ''; this.state.scriptName = ''; this.state.activeScriptId = ''; this.state.activeGradientId = ''; this.state.gradient = undefined; this.state.mode = 0; this.state.color = colorSchema.parse({});
           }

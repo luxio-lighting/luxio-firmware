@@ -1,4 +1,5 @@
 #include "transition.h"
+#include "button_input.h"
 #include "led_encoder.h"
 #include <Arduino.h>
 #include <WiFi.h>
@@ -601,7 +602,8 @@ static bool listColors(pb_ostream_t *stream, const pb_field_t *field, void * con
   }
   return true;
 }
-size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> &output, size_t prefix) {
+size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> &output, size_t prefix, bool *accepted) {
+  if (accepted) *accepted = false;
   output.reset();
   xSemaphoreTake(stateMutex, portMAX_DELAY);
   auto *request = new (std::nothrow) luxio_Request{};
@@ -666,12 +668,19 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!c.has_matter) { c.has_matter = true; c.matter = state.config.matter; }
       if (radioRestartAt) { error = "Radio settings are restarting the device"; break; }
       if (!c.has_relay) { c.has_relay = state.config.has_relay; c.relay = state.config.relay; }
+      if (!c.has_button) { c.has_button = true; c.button = state.config.button; }
       bool supportedStrip = false;
       for (const auto &type : supportedStripTypes) if (!strcmp(c.strip_type, type)) supportedStrip = true;
       if (!request->has_config || !name.length() || c.led_count < 1 || c.led_count > 1024 || c.channel > 100 || (!GPIO_IS_VALID_OUTPUT_GPIO(c.gpio)) || !supportedStrip) { error = "Invalid strip configuration"; break; }
       if (c.has_relay && c.relay.enabled && (c.relay.gpio == c.gpio || !GPIO_IS_VALID_OUTPUT_GPIO(c.relay.gpio))) { error = "Relay GPIO must be a separate valid output pin"; break; }
+      if (c.button.press != luxio_ButtonPressAction_TOGGLE_POWER && c.button.press != luxio_ButtonPressAction_CYCLE_SAVED_PRESETS) { error = "Invalid button press action"; break; }
+      if (c.button.enabled && (!GPIO_IS_VALID_GPIO(c.button.gpio) || c.button.gpio == c.gpio ||
+          (c.has_relay && c.relay.enabled && c.button.gpio == c.relay.gpio))) { error = "Button GPIO must be a separate valid input pin"; break; }
+#if CONFIG_IDF_TARGET_ESP32
+      if (c.button.enabled && c.button.gpio >= 34) { error = "Button GPIO requires an internal pull-up"; break; }
+#endif
       // Reserve the active serial interfaces and the chip's flash/PSRAM pins.
-      const uint32_t pins[] = {c.gpio, c.has_relay && c.relay.enabled ? c.relay.gpio : c.gpio};
+      const uint32_t pins[] = {c.gpio, c.has_relay && c.relay.enabled ? c.relay.gpio : c.gpio, c.button.enabled ? c.button.gpio : c.gpio};
       for (uint32_t pin : pins) {
       if (pin == TX || pin == RX) { error = "GPIO is reserved for serial"; break; }
 #if CONFIG_IDF_TARGET_ESP32
@@ -1124,11 +1133,16 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
     strlcpy(response->error, encodingError ? encodingError : "Unable to encode response", sizeof(response->error));
     size = encodeControlResponse(*response, output, prefix);
   }
+  if (accepted) *accepted = !error.length();
   pb_release(luxio_Request_fields, request);
   delete request; delete response;
   responseScript.reset(); // Detach borrowed source before another task can replace the animation.
   xSemaphoreGive(stateMutex);
   return size;
+}
+
+size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> &output, size_t prefix) {
+  return dispatch(input, length, output, prefix, nullptr);
 }
 
 static esp_err_t httpHandler(httpd_req_t *request) {
@@ -1457,6 +1471,7 @@ void setup() {
   state.supported_strip_types_count = sizeof(supportedStripTypes) / sizeof(supportedStripTypes[0]);
   for (size_t i = 0; i < state.supported_strip_types_count; ++i) strlcpy(state.supported_strip_types[i], supportedStripTypes[i], sizeof(state.supported_strip_types[i]));
   state.factory_reset_supported = true;
+  if (!state.config.has_button) { state.config.has_button = true; state.config.button = {false, 18, luxio_ButtonPressAction_TOGGLE_POWER}; }
   if (!state.config.has_wifi) { state.config.has_wifi = true; state.config.wifi.enabled = true; }
   if (!state.config.has_matter) { state.config.has_matter = true; state.config.matter.enabled = true; }
   // Size all three frames for this strip rather than reserving 18 KiB for 1024 LEDs.
@@ -1624,6 +1639,78 @@ void loop() {
       xSemaphoreGive(stateMutex); advertisedIp = WiFi.localIP();
     }
   } else if (WiFi.status() != WL_CONNECTED) advertisedIp = IPAddress();
+  // Physical controls use the same commands and fading as Studio and Matter.
+  // No button action writes settings or changes brightness.
+  {
+    static ButtonInput button;
+    static int buttonGpio = -1;
+    static luxio_ButtonPressAction buttonPress = luxio_ButtonPressAction_TOGGLE_POWER;
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    const auto config = state.config.button;
+    const int gpio = config.enabled ? int(config.gpio) : -1;
+    if (gpio != buttonGpio || config.press != buttonPress) {
+      if (buttonGpio >= 0 && buttonGpio != int(state.config.gpio) &&
+          !(state.config.relay.enabled && buttonGpio == int(state.config.relay.gpio))) pinMode(buttonGpio, INPUT);
+      buttonGpio = gpio; buttonPress = config.press;
+      if (gpio >= 0) pinMode(gpio, INPUT_PULLUP);
+      button.reset(gpio >= 0 && digitalRead(gpio) == LOW, millis());
+    }
+    const auto event = gpio >= 0 && !factoryResetPending && !radioRestartAt ? button.update(digitalRead(gpio) == LOW, millis()) : ButtonInput::None;
+    const bool on = event == ButtonInput::Press && !state.on;
+    String cursor;
+    if (event == ButtonInput::Press && config.press == luxio_ButtonPressAction_CYCLE_SAVED_PRESETS) {
+      if (state.mode == luxio_Mode_COLOR && state.active_color_id[0]) cursor = String("/colors/") + state.active_color_id + ".pb";
+      else if (state.mode == luxio_Mode_GRADIENT && state.active_gradient_id[0]) cursor = String("/gradients/") + state.active_gradient_id + ".pb";
+      else if (state.mode == luxio_Mode_ANIMATION && state.active_script_id[0]) cursor = String("/scripts/") + state.active_script_id + ".pb";
+    }
+    xSemaphoreGive(stateMutex);
+    if (event != ButtonInput::None) {
+      auto request = std::unique_ptr<luxio_Request>(new (std::nothrow) luxio_Request{});
+      if (request) {
+        String firstAttempt;
+        do {
+          *request = {}; request->operation = luxio_Operation_SET_POWER; request->on = on;
+          const bool cycle = event == ButtonInput::Press && config.press == luxio_ButtonPressAction_CYCLE_SAVED_PRESETS;
+          if (cycle) {
+            String first, next;
+            // Select by path, not filesystem iteration order, without loading the library into RAM.
+            xSemaphoreTake(stateMutex, portMAX_DELAY);
+            for (const char *directory : {"/colors", "/gradients", "/scripts"}) {
+              if (!strcmp(directory, "/gradients") && state.config.led_count <= 1) continue;
+              File folder = LittleFS.open(directory);
+              if (!folder || !folder.isDirectory()) continue;
+              File file;
+              while ((file = folder.openNextFile())) {
+                String name = file.name(); name = name.substring(name.lastIndexOf('/') + 1);
+                const bool valid = !file.isDirectory() && name.endsWith(".pb") && validId(name.substring(0, name.length() - 3).c_str());
+                file.close();
+                if (!valid) continue;
+                String path = String(directory) + "/" + name;
+                if (!first.length() || path < first) first = path;
+                if (path > cursor && (!next.length() || path < next)) next = path;
+              }
+            }
+            xSemaphoreGive(stateMutex);
+            if (!next.length()) next = first;
+            if (!next.length() || next == firstAttempt) break;
+            if (!firstAttempt.length()) firstAttempt = next;
+            cursor = next;
+            String id = next.substring(next.lastIndexOf('/') + 1, next.length() - 3);
+            if (next.startsWith("/colors/")) { request->operation = luxio_Operation_RUN_COLOR; strlcpy(request->color_id, id.c_str(), sizeof(request->color_id)); }
+            else if (next.startsWith("/gradients/")) { request->operation = luxio_Operation_RUN_GRADIENT; strlcpy(request->gradient_id, id.c_str(), sizeof(request->gradient_id)); }
+            else { request->operation = luxio_Operation_RUN_SCRIPT; strlcpy(request->script_id, id.c_str(), sizeof(request->script_id)); }
+          }
+          uint8_t bytes[160]; auto encoder = pb_ostream_from_buffer(bytes, sizeof(bytes));
+          if (!pb_encode(&encoder, luxio_Request_fields, request.get())) break;
+          std::unique_ptr<uint8_t[]> output;
+          bool accepted = false;
+          dispatch(bytes, encoder.bytes_written, output, 0, &accepted);
+          if (accepted || !cycle) break;
+          // Skip incompatible/corrupt saved items, stopping after one complete pass.
+        } while (true);
+      }
+    }
+  }
   static std::unique_ptr<uint8_t[]> input;
   static uint32_t expected = 0, received = 0, header = 0, lastByte = 0;
   if (header && millis() - lastByte > 3000) { input.reset(); received = 0; expected = 0; header = 0; }
