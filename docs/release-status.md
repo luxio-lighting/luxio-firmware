@@ -845,5 +845,32 @@ saved files were instead verified with on-device digests. Private backups and
 verification records remain ignored in `.sdk/button-flash-20261124/`.
 
 Physical switch presses and other chip boards have not been hardware-tested in
-this change. Public matrix build and publication results will be recorded after
-the release workflow completes.
+this change. The completed public matrix build and publication are recorded below.
+
+
+## Build 47 publication (2026-11-24)
+
+Build 47 was published for all six targets on channel 0 from commit
+`b1d5a516e54190aec3b230e22b5b9f2280dd24c0` by
+[workflow 45413679434](https://github.com/luxio-lighting/luxio-firmware/actions/runs/45413679434).
+All target builds and the publication job passed, including the new S3 host
+regressions for button input and preset cycling. Independent downloads verified
+all six ECDSA signatures and all thirty flash parts: sizes, SHA-256, chip IDs,
+flash-size headers, addresses, and application/recovery build numbers. HTTP
+manifests matched HTTPS; HTTP application downloads matched the signed hashes
+without redirects. S31 requires 8 MB; the other five targets require 4 MB.
+
+Studio's Button settings were deployed from `a83f84d70411ee817a208e3b675ecf610bf1eb23`
+by [workflow 45413637207](https://github.com/luxio-lighting/studio.luxio.lighting/actions/runs/45413637207).
+All 52 Studio tests passed. The live website's JavaScript was fetched and verified
+to contain the new controls. Publication did not reflash the two connected S3
+units; they retain the locally tested Button firmware described above.
+
+| Chip | Published application bytes | SHA-256 |
+| --- | ---: | --- |
+| esp32 | 2,308,160 | `fd4f5b337dc8d234c8f6087af6dfb44bf613c1fff69c9d239490cdd9297afa3d` |
+| esp32s3 | 2,262,864 | `a052f74e07ca1549de533b13afdfc7074524f259aeaf0ef57c533873fd757902` |
+| esp32s31 | 3,062,336 | `f93b65a3b3316db6682943df42c446f13509f3d2facb6761c8372428f2ef1ac1` |
+| esp32c3 | 2,290,832 | `db98fe9064daca3bdf24acdd3a5d14a69810ef26b38493a23e1d9f0969c77748` |
+| esp32c5 | 2,498,224 | `44898fd8a5ec9cb0117f2acdae313837735d61bdf80b20b3586037b071646ebc` |
+| esp32c6 | 2,430,752 | `e60fca147509b42e843edcb37a382832a97f5b883a82b30cbe17c52b7be88086` |
