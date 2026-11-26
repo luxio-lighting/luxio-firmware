@@ -125,7 +125,9 @@ static bool factoryResetPending;
 static String wifiSsid, wifiPassword;
 static std::atomic<uint32_t> wifiDisconnectCount{0}, wifiDisconnectReason{0};
 static bool wifiScanning, wifiScanPending, wifiScanStopRequested, wifiScanReconnect;
-static uint32_t wifiScanStarted, wifiScanTimeoutMs = 8000;
+static bool wifiScanWaitingDisconnect, wifiScanRadioStarted;
+static uint32_t wifiScanStarted, wifiScanTimeoutMs = 8000, wifiScanDisconnectCount, wifiScanWaitStarted;
+static constexpr uint32_t WIFI_SCAN_DISCONNECT_TIMEOUT_MS = 2000;
 static std::unique_ptr<luxio_WifiNetwork[]> wifiNetworks;
 static pb_size_t wifiNetworkCount;
 static String wifiScanError;
@@ -818,6 +820,7 @@ size_t dispatch(const uint8_t *input, size_t length, std::unique_ptr<uint8_t[]> 
       if (!wifiScanning) {
         wifiScanning = wifiScanPending = true;
         wifiScanStopRequested = false;
+        wifiScanWaitingDisconnect = wifiScanRadioStarted = false;
         wifiScanStarted = millis();
         wifiScanTimeoutMs = request->wifi_scan_timeout_ms ? constrain(request->wifi_scan_timeout_ms, 250U, 8000U) : 8000;
         wifiNetworkCount = 0; wifiScanError = "";
@@ -1587,6 +1590,7 @@ void setup() {
   if (state.mode == luxio_Mode_GRADIENT) renderGradient(state.gradient, pixels, state.config.led_count);
   else if (state.mode != luxio_Mode_ANIMATION) applyColor();
   render();
+  startBluetooth(state.config.name);
   // The strip is externally powered: keep the radio awake for local controls
   // and Matter, and choose the strongest AP across all channels on each join.
   if (state.config.wifi.enabled) {
@@ -1614,7 +1618,6 @@ void setup() {
   httpd_uri_t websocket = {}; websocket.uri = "/api/ws"; websocket.method = HTTP_GET; websocket.handler = websocketHandler; websocket.is_websocket = true; httpd_register_uri_handler(httpServer, &websocket);
   xTaskCreate(cloudTask, "luxio-cloud", LUXIO_INTERNAL_RAM_RADIOS ? 8192 : 12288, nullptr, 1, nullptr);
   }
-  startBluetooth(state.config.name);
   // Reaching initialized local controls acknowledges the completed request.
   // An offline device must not roll back merely because Matter is waiting for Wi-Fi.
   // No timer, boot path or Matter callback checks for or starts a new update.
@@ -1801,37 +1804,64 @@ void loop() {
     // ANIMATION_OUTPUT_END
     if (wifiScanning) {
       // Never wait for the radio under the state lock or pause the LED render loop.
-      int count;
-      const bool starting = wifiScanPending;
+      int count = WIFI_SCAN_RUNNING;
+      bool starting = false, startRadioScan = false;
       if (wifiScanPending) {
         wifiScanPending = false;
         // WIFI_SCAN_PAUSE_CONNECT_BEGIN
         wifiScanReconnect = !WiFi.STA.connected() && wifiSsid.length();
         if (wifiScanReconnect) {
           WiFi.setAutoReconnect(false);
-          // Arduino disconnect() does nothing until association succeeds.
-          // Cancel the in-progress IDF attempt so it cannot block the scan.
-          esp_wifi_disconnect();
-        }
+          wifiScanDisconnectCount = wifiDisconnectCount.load();
+          wifiScanWaitStarted = millis();
+          const esp_err_t disconnectResult = esp_wifi_disconnect();
+          if (disconnectResult == ESP_ERR_WIFI_NOT_CONNECT) startRadioScan = true;
+          else if (disconnectResult == ESP_OK) wifiScanWaitingDisconnect = true;
+          else { wifiScanError = "Unable to pause Wi-Fi connection for scanning."; wifiScanning = false; }
+        } else startRadioScan = true;
         // WIFI_SCAN_PAUSE_CONNECT_END
+      }
+      // WIFI_SCAN_WAIT_CONNECT_BEGIN
+      if (wifiScanWaitingDisconnect) {
+        if (wifiDisconnectCount.load() != wifiScanDisconnectCount) {
+          wifiScanWaitingDisconnect = false;
+          startRadioScan = true;
+        } else if (millis() - wifiScanWaitStarted >= WIFI_SCAN_DISCONNECT_TIMEOUT_MS) {
+          wifiScanWaitingDisconnect = false;
+          wifiScanError = "Timed out waiting for Wi-Fi to pause before scanning.";
+          wifiScanning = false;
+        }
+      }
+      // WIFI_SCAN_WAIT_CONNECT_END
+      if (!wifiScanning && wifiScanReconnect) {
+        // WIFI_SCAN_RESUME_CONNECT_BEGIN
+        WiFi.setAutoReconnect(true);
+        wifiPending = true;
+        wifiScanReconnect = false;
+        // WIFI_SCAN_RESUME_CONNECT_END
+      }
+      if (startRadioScan && wifiScanning) {
+        starting = true;
+        wifiScanStarted = millis();
         // Keep Arduino's watchdog beyond our deadline so its callback can
         // collect partial results after esp_wifi_scan_stop().
         WiFi.setScanTimeout(wifiScanTimeoutMs + 1000);
         WiFi.setScanActiveMinTime(wifiScanTimeoutMs <= 2000 ? 20 : 100);
         count = WiFi.scanNetworks(true, false, false, wifiScanTimeoutMs <= 2000 ? 40 : 300);
-      } else count = WiFi.scanComplete();
+        wifiScanRadioStarted = true;
+      } else if (wifiScanRadioStarted) count = WiFi.scanComplete();
       // WIFI_SCAN_DEADLINE_BEGIN
       const uint32_t elapsed = millis() - wifiScanStarted;
-      if (count == WIFI_SCAN_RUNNING && !wifiScanStopRequested && elapsed >= wifiScanTimeoutMs - 200) {
+      if (wifiScanRadioStarted && count == WIFI_SCAN_RUNNING && !wifiScanStopRequested && elapsed >= wifiScanTimeoutMs - 200) {
         wifiScanStopRequested = true;
         esp_wifi_scan_stop(); // Emits SCAN_DONE; retain the APs already found.
       }
-      if (count == WIFI_SCAN_RUNNING && elapsed >= wifiScanTimeoutMs - 50) {
+      if (wifiScanRadioStarted && count == WIFI_SCAN_RUNNING && elapsed >= wifiScanTimeoutMs - 50) {
         count = WiFi.scanComplete();
         if (count == WIFI_SCAN_RUNNING) count = WIFI_SCAN_FAILED;
       }
       // WIFI_SCAN_DEADLINE_END
-      if (count != WIFI_SCAN_RUNNING) {
+      if (wifiScanRadioStarted && count != WIFI_SCAN_RUNNING) {
         if (count < 0) {
           if (!starting) esp_wifi_scan_stop();
           wifiScanError = "Wi-Fi scan failed. Retry when the device is not connecting.";
@@ -1863,7 +1893,7 @@ void loop() {
             wifiNetworks[position].password_required = password;
           }
         }
-        WiFi.scanDelete(); wifiScanning = false;
+        WiFi.scanDelete(); wifiScanning = false; wifiScanRadioStarted = false;
         // WIFI_SCAN_RESUME_CONNECT_BEGIN
         if (wifiScanReconnect) {
           WiFi.setAutoReconnect(true);
