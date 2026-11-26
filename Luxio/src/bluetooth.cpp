@@ -2,6 +2,7 @@
 #if CONFIG_BT_NIMBLE_ENABLED
 // Luxio owns BLE; Matter uses IP transports only.
 #include <esp_heap_caps.h>
+#include <esp_log.h>
 #include "control_error.h"
 #include "bluetooth_name.h"
 #include <freertos/queue.h>
@@ -102,7 +103,14 @@ void startBluetooth(const char *name) {
 #endif
   bufferMutex = xSemaphoreCreateMutex();
   if (!bufferMutex) abort();
-  if (nimble_port_init() != ESP_OK) abort();
+  const esp_err_t result = nimble_port_init();
+  if (result != ESP_OK) {
+    ESP_LOGE("LuxioBLE", "NimBLE init failed (%d), internal free=%u largest=%u",
+      result,
+      unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+      unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+    abort();
+  }
   // Wi-Fi passwords and pairing codes travel over an encrypted BLE link.
   // A displayless controller uses the OS's Just Works pairing flow.
   ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;

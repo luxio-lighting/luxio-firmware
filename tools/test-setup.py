@@ -9,6 +9,7 @@ start = source.index('      uint8_t saved[luxio_Config_size], previous[luxio_Con
 persistence = source[start:source.index('      const bool nameChanged', start)]
 timeout = next(line.strip() for line in source.splitlines() if 'wifiScanTimeoutMs = request->wifi_scan_timeout_ms ?' in line)
 pause = source.split('// WIFI_SCAN_PAUSE_CONNECT_BEGIN')[1].split('// WIFI_SCAN_PAUSE_CONNECT_END')[0]
+disconnect_wait = source.split('// WIFI_SCAN_WAIT_CONNECT_BEGIN')[1].split('// WIFI_SCAN_WAIT_CONNECT_END')[0]
 resume = source.split('// WIFI_SCAN_RESUME_CONNECT_BEGIN')[1].split('// WIFI_SCAN_RESUME_CONNECT_END')[0]
 fixture = r'''
 #include <algorithm>
@@ -17,22 +18,31 @@ fixture = r'''
 #include <cstring>
 #include <string>
 #include <cstdio>
+#include <atomic>
 constexpr int WIFI_SCAN_RUNNING = -1, WIFI_SCAN_FAILED = -2;
+constexpr int ESP_OK = 0, ESP_ERR_WIFI_NOT_CONNECT = 1, ESP_ERR_OTHER = 2;
+constexpr uint32_t WIFI_SCAN_DISCONNECT_TIMEOUT_MS = 2000;
 static uint32_t now, wifiScanStarted, wifiScanTimeoutMs;
 static bool wifiScanStopRequested;
 static int stopCalls;
 static uint32_t millis() { return now; }
 static void esp_wifi_scan_stop() { stopCalls++; }
+using esp_err_t = int;
 struct {
   struct { bool joined = false; bool connected() { return joined; } } STA;
   bool autoReconnect = true;
   void setAutoReconnect(bool enabled) { autoReconnect = enabled; }
   int result = WIFI_SCAN_RUNNING; int scanComplete() { return result; }
 } WiFi;
-static bool wifiScanReconnect, wifiPending;
+static bool wifiScanReconnect, wifiPending, wifiScanWaitingDisconnect, wifiScanRadioStarted, wifiScanning;
+static uint32_t wifiScanDisconnectCount, wifiScanWaitStarted;
+static std::atomic<uint32_t> wifiDisconnectCount{0};
+static bool startRadioScan;
+static std::string wifiScanError;
 static std::string wifiSsid;
 static int disconnectCalls;
-static void esp_wifi_disconnect() { assert(!WiFi.autoReconnect && !WiFi.STA.joined); disconnectCalls++; }
+static esp_err_t disconnectResult = ESP_OK;
+static esp_err_t esp_wifi_disconnect() { assert(!WiFi.autoReconnect && !WiFi.STA.joined); disconnectCalls++; return disconnectResult; }
 struct Request { uint32_t wifi_scan_timeout_ms; bool config_preview; };
 static uint32_t constrain(uint32_t n, uint32_t low, uint32_t high) { return std::clamp(n, low, high); }
 static int poll(int count) {
@@ -64,21 +74,65 @@ int main() {
   for (bool joined : {false, true}) for (bool saved : {false, true}) {
     WiFi.STA.joined = joined; WiFi.autoReconnect = true;
     wifiSsid = saved ? "saved-network" : "";
-    wifiPending = false; disconnectCalls = 0;
+    wifiPending = false; wifiScanning = true; wifiScanWaitingDisconnect = false;
+    startRadioScan = false; disconnectCalls = 0; disconnectResult = ESP_OK;
+    wifiDisconnectCount.store(10);
     // PAUSE
     assert(wifiScanReconnect == (!joined && saved));
     assert(disconnectCalls == (!joined && saved ? 1 : 0));
     assert(WiFi.autoReconnect == (joined || !saved));
-    // RESUME
+    assert(startRadioScan == (joined || !saved));
+    assert(wifiScanWaitingDisconnect == (!joined && saved));
+    if (wifiScanWaitingDisconnect) {
+      wifiScanDisconnectCount = 10; wifiScanWaitStarted = now;
+      // WAIT FOR DISCONNECT
+      assert(wifiScanWaitingDisconnect && !startRadioScan);
+      wifiDisconnectCount.fetch_add(1); now++;
+      // WAIT FOR DISCONNECT
+      assert(!wifiScanWaitingDisconnect && startRadioScan);
+    }
+    if (wifiScanReconnect) {
+      // RESUME
+    }
     assert(WiFi.autoReconnect && !wifiScanReconnect);
     assert(wifiPending == (!joined && saved));
   }
+  WiFi.STA.joined = false; wifiSsid = "saved-network"; WiFi.autoReconnect = true;
+  wifiScanning = true; wifiScanReconnect = false; wifiScanWaitingDisconnect = false;
+  startRadioScan = false; disconnectResult = ESP_OK; wifiDisconnectCount.store(20);
+  // PAUSE
+  assert(wifiScanWaitingDisconnect && !startRadioScan);
+  wifiScanDisconnectCount = 20; wifiScanWaitStarted = now; now += WIFI_SCAN_DISCONNECT_TIMEOUT_MS;
+  wifiScanning = true;
+  // WAIT FOR DISCONNECT
+  assert(!wifiScanWaitingDisconnect && !wifiScanning);
+  assert(wifiScanError == "Timed out waiting for Wi-Fi to pause before scanning.");
+  WiFi.autoReconnect = true; wifiPending = false; wifiScanReconnect = true;
+  if (wifiScanReconnect) {
+    // RESUME
+  }
+  assert(WiFi.autoReconnect && !wifiScanReconnect && wifiPending);
+  WiFi.STA.joined = false; wifiSsid = "saved-network"; WiFi.autoReconnect = true;
+  wifiScanning = true; wifiScanReconnect = false; wifiScanWaitingDisconnect = false;
+  startRadioScan = false; disconnectCalls = 0; disconnectResult = ESP_ERR_WIFI_NOT_CONNECT;
+  // PAUSE
+  assert(startRadioScan && !wifiScanWaitingDisconnect && wifiScanning);
+  wifiScanning = true; wifiScanReconnect = false; wifiScanWaitingDisconnect = false;
+  startRadioScan = false; disconnectCalls = 0; disconnectResult = ESP_ERR_OTHER; wifiPending = false;
+  // PAUSE
+  assert(!startRadioScan && !wifiScanWaitingDisconnect && !wifiScanning);
+  assert(wifiScanError == "Unable to pause Wi-Fi connection for scanning.");
+  if (wifiScanReconnect) {
+    // RESUME
+  }
+  assert(WiFi.autoReconnect && wifiPending && !wifiScanReconnect);
   for (uint32_t budget : {0U, 1U, 2000U, 8000U, 99999U}) {
     Request data{budget, true}; auto *request = &data;
     // TIMEOUT
     assert(wifiScanTimeoutMs == (budget == 0 ? 8000 : std::clamp(budget, 250U, 8000U)));
     // Includes unsigned millisecond-clock wraparound.
     wifiScanStarted = UINT32_MAX - 100; wifiScanStopRequested = false; stopCalls = 0;
+    wifiScanRadioStarted = true;
     WiFi.result = WIFI_SCAN_RUNNING;
     now = wifiScanStarted + wifiScanTimeoutMs - 201;
     assert(poll(WIFI_SCAN_RUNNING) == WIFI_SCAN_RUNNING && stopCalls == 0);
@@ -96,9 +150,10 @@ int main() {
   assert(persist(&request, {64}).empty()); assert(prefs.writes == 1);
   request.config_preview = true; assert(persist(&request, {72}).empty()); assert(prefs.writes == 1);
   request.config_preview = false; assert(persist(&request, {72}).empty()); assert(prefs.writes == 2);
-  puts("PASS: bounded scans, reconnect pause/resume, connected-link preservation, partial results, clock wraparound, RAM-only LED previews, final config persistence");
+  puts("PASS: bounded scans, disconnect-confirmed scan start, reconnect timeout, connected-link preservation, partial results, clock wraparound, RAM-only LED previews, final config persistence");
 }
-'''.replace('// DEADLINE', deadline).replace('// PERSISTENCE', persistence).replace('// TIMEOUT', timeout).replace('// PAUSE', pause).replace('// RESUME', resume)
+'''.replace('// DEADLINE', deadline).replace('// PERSISTENCE', persistence).replace('// TIMEOUT', timeout).replace('// PAUSE', pause).replace('// WAIT FOR DISCONNECT', disconnect_wait).replace('// RESUME', resume)
+assert source.index('startBluetooth(state.config.name);') < source.index('WiFi.mode(WIFI_STA);'), 'BLE must initialize before Wi-Fi station allocation'
 folder = root / '.sdk'; folder.mkdir(exist_ok=True)
 cpp = folder / 'test-setup.cpp'; cpp.write_text(fixture)
 binary = folder / 'test-setup'
