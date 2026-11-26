@@ -14,7 +14,16 @@ Install PlatformIO Core (or the PlatformIO IDE extension), Arduino CLI, Python
 3, and a C++ compiler. From this repository root, initialize the local SDK once:
 
 ```sh
+command -v arduino-cli
 tools/bootstrap-firmware.sh
+```
+
+The bootstrap installs the pinned ESP32 packages in `.sdk/`; it does not install
+the Arduino CLI executable itself. If PlatformIO's integrated terminal cannot
+find the CLI, install it on `PATH` or specify its absolute path for the build:
+
+```sh
+ARDUINO_CLI=/absolute/path/to/arduino-cli pio run -e luxio_esp32c3 -t luxio_build
 ```
 
 Build the ESP32-C3 firmware and its verified USB package:

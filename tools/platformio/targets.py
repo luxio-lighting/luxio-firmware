@@ -3,6 +3,7 @@ Import("env")
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -19,10 +20,26 @@ EXPECTED_PARTS = {
 
 
 def build_firmware(source, target, env):
+    child_env = dict(env["ENV"])
+    configured_cli = child_env.get("ARDUINO_CLI")
+    arduino_cli = (
+        shutil.which(configured_cli, path=child_env.get("PATH"))
+        if configured_cli
+        else shutil.which("arduino-cli", path=child_env.get("PATH"))
+    )
+    if not arduino_cli:
+        raise FileNotFoundError(
+            "Arduino CLI is not available in this PlatformIO terminal. "
+            "Install Arduino CLI and ensure `command -v arduino-cli` finds it, "
+            "or run `ARDUINO_CLI=/absolute/path/to/arduino-cli "
+            "pio run -e luxio_esp32c3 -t luxio_build`."
+        )
+    child_env["ARDUINO_CLI"] = arduino_cli
     subprocess.run(
         [sys.executable, "tools/build-firmware.py", "esp32c3"],
         cwd=ROOT,
         check=True,
+        env=child_env,
     )
 
 
