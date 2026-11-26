@@ -2,6 +2,41 @@
 
 The firmware matrix includes Matter and a fixed Wi-Fi recovery loader. Firmware checks and installs are explicitly user-initiated. A reboot during an accepted download resumes that same request; it does not select a new release.
 
+## PlatformIO setup (LOLIN C3 Mini / ESP32-C3)
+
+The PlatformIO integration provides build and flash targets, while delegating
+compilation and packaging to the pinned upstream Arduino toolchain. This is
+intentional: the Luxio image uses custom Matter linking and a recovery/app
+partition layout, so PlatformIO's normal single-image build or upload targets
+must not be used for it.
+
+Install PlatformIO Core (or the PlatformIO IDE extension), Arduino CLI, Python
+3, and a C++ compiler. From this repository root, initialize the local SDK once:
+
+```sh
+tools/bootstrap-firmware.sh
+```
+
+Build the ESP32-C3 firmware and its verified USB package:
+
+```sh
+pio run -e luxio_esp32c3 -t luxio_build
+```
+
+Back up the device's flash before initial installation. Confirm it is an
+ESP32-C3 with at least 4 MB of flash. Flash the firmware package with:
+
+```sh
+pio run -e luxio_esp32c3 -t luxio_flash --upload-port /dev/ttyACM0
+```
+
+Replace `/dev/ttyACM0` with the device's serial port. The custom target checks
+the generated manifest, image hashes, target, flash size, and offsets before
+writing the bootloader, partition table, erased OTA selection, recovery loader,
+and main app. It does not erase the whole flash; NVS and filesystem partitions
+are left untouched. Review `build/esp32c3/release/manifest.local.json` before
+flashing. Do not use the normal `pio run -t upload` target.
+
 ```sh
 # For a fresh checkout, install Arduino CLI, then:
 tools/bootstrap-firmware.sh
