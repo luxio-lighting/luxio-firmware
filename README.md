@@ -25,7 +25,7 @@ The existing ESP32/S3 layout remains:
 | Library filesystem | `0x3b0000` | 256 KiB |
 | Core dumps | `0x3f0000` | 64 KiB |
 
-Initial installation requires USB flashing of the bootloader, partition table, erased OTA selection, recovery image and main image at the manifest offsets. Back up flash first. Do not erase all flash: NVS contains Wi-Fi credentials, identity and Matter state, and the filesystem contains saved colors, gradients, and animations. Normal network updates write only the main application; the loader is never replaced over the network.
+Initial installation requires USB flashing of the bootloader, partition table, erased OTA selection, recovery image and main image at the manifest offsets. Back up flash first. Do not erase all flash: NVS contains Wi-Fi credentials, identity and Matter state, and the filesystem contains saved colors, gradients, and animations. If Chromium on Ubuntu cannot detect a connected ESP32 for web flashing, see the [Snap Web Serial troubleshooting guide](docs/chromium-web-serial-ubuntu.md). Normal network updates write only the main application; the loader is never replaced over the network.
 
 The recovery web page is at the device's LAN IP while updating, with `/status`, `POST /retry` and `POST /update`. A replacement update requires `url` (HTTPS), `sha256`, `size`, `build`, and `target: "<chip>-recovery-v1"`. It validates the target, image size, chip, Luxio app descriptor/build, SHA-256 and ESP image checksum before boot selection. Failed transfers stay in recovery for manual retry. The bootloader's pending-image rollback returns to recovery if the new application resets before confirming startup; there is no previous full application to restore.
 
